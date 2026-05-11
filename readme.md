@@ -50,9 +50,9 @@ Developing software for retro home computers has always meant assembling a fragi
 | System | Status |
 |---|---|
 | Amstrad CPC / CPC+ | ✅ Full support |
-| ZX Spectrum | 🚧 Planned |
-| Commodore 64 | 🚧 Planned |
-| MSX | 🚧 Planned |
+| ZX Spectrum | 🚧 Prepared for |
+| Commodore 64 | 🚧 Prepared for |
+| MSX | 🚧 Prepared for |
 
 ---
 
@@ -253,6 +253,8 @@ A Build project item ties everything together. It holds:
 
 For the complete documentation on the build project item, click [here](doc/usage/build.md).
 
+<div align="center"><img src="doc/img/build-item.png" alt="Bitmap conversion editor" width="800" /></div>
+
 ### Palette
 
 A Palette project item describes the colour constraints for a section of the screen.
@@ -264,6 +266,8 @@ A Palette project item describes the colour constraints for a section of the scr
 The palette solver finds the smallest hardware palette that satisfies all participants simultaneously.
 
 For the complete documentation on the palette project item, click [here](doc/usage/palette.md).
+
+<div align="center"><img src="doc/img/palette-solver.png" alt="Bitmap conversion editor" width="800" /></div>
 
 ---
 
