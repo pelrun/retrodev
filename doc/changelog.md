@@ -1,3 +1,5 @@
+## Version 1.0.24188149
+
 
 * Added: Build items can be duplicated now.
 * Fixed: File changed externally sometimes not being detected
