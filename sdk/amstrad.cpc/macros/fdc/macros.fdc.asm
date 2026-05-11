@@ -2,14 +2,14 @@
 ;
 ; Retrodev SDK -- CPC FDC macro definitions.
 ;
-; Purpose: define uPD765 controller constants and helper macros.
+; Purpose: define uPD765 controller constants.
 ;
 ; (c) TLOTB 2026
 ;
 ;-----------------------------------------------------------------------
 
-IFNDEF __MACROS_FDC_ASM__
-__MACROS_FDC_ASM__ equ 1
+ifndef __macros_fdc_asm__
+__macros_fdc_asm__ equ 1
 
 	; NEC uPD765 FDC definitions
 	;
@@ -19,8 +19,8 @@ __MACROS_FDC_ASM__ equ 1
 	;
 	; All FDC I/O goes through two ports:
 	;   Main Status Register (#FB7E, read-only)  -- handshake and busy state.
-	;   Data Register        (#FA7E, read/write) -- command, data, and result bytes.
-	; A separate motor-control latch at #FB7F (write-only) switches drive motors.
+	;   Data Register        (#FB7F, read/write) -- command, data, and result bytes.
+	; A separate motor-control latch at #FA7E (write-only) switches drive motors.
 	;
 	; Every command follows the same three-phase protocol:
 	;   Command phase  : CPU writes command byte(s) to the data register.
@@ -41,24 +41,22 @@ __MACROS_FDC_ASM__ equ 1
 	;   Bit 4 (CB)   = 1: FDC busy (command in progress).
 	;   Bits 3-0     = drive 3-0 busy (seek in progress on that drive).
 	;
-	; FDC_PORT_DATA (#FA7E, read/write)
+	; FDC_PORT_DATA (#FB7F, read/write)
 	;   Data Register. Used for all command, data, and result byte transfers.
 	;   Read or write only when RQM=1 in the Main Status Register.
 	;   DIO determines direction: 0 = write to FDC; 1 = read from FDC.
 	;
 	; FDC_PORT_MOTOR (#FA7E, write-only)
 	;   Motor latch. Bit 0 = drive A motor; bit 1 = drive B motor.
-	;   Same I/O address as the data register -- the CPC hardware uses this port
-	;   for both motor control (before the FDC is selected) and data transfer.
 	;   All three reference implementations (fdcload, DDFDC, ReadSectors) use #FA7E.
 	;   Writing 0 stops both motors; writing FDC_MOTOR_A|FDC_MOTOR_B runs both.
 	;   Allow ~300 ms after motor-on before issuing any read/write command.
 	;
 	FDC_PORT_STATUS		equ #fb7e		; main status register (read-only)
 	FDC_PORT_STATUS_B	equ #fb		    ; high byte of FDC_PORT_STATUS
-	FDC_PORT_DATA		equ #fa7e		; data register (read/write)
-	FDC_PORT_DATA_B		equ #fa		    ; high byte of FDC_PORT_DATA
-	FDC_PORT_MOTOR		equ #fa7e		; motor control latch (write-only) -- same address as data port
+	FDC_PORT_DATA		equ #fb7f		; data register (read/write)
+	FDC_PORT_DATA_B		equ #fb		    ; high byte of FDC_PORT_DATA
+	FDC_PORT_MOTOR		equ #fa7e		; motor control latch (write-only)
 	FDC_PORT_MOTOR_B	equ #fa		    ; high byte of FDC_PORT_MOTOR
 
 	; ============================================================
@@ -72,12 +70,21 @@ __MACROS_FDC_ASM__ equ 1
 	FDC_MSR_D2B			equ #04		; bit 2: drive 2 seek in progress
 	FDC_MSR_D1B			equ #02		; bit 1: drive 1 seek in progress
 	FDC_MSR_D0B			equ #01		; bit 0: drive 0 seek in progress
+	; Bit positions for use with the Z80 BIT/SET/RES instructions
+	FDC_MSR_RQM_BIT		equ 7		; bit position of RQM
+	FDC_MSR_DIO_BIT		equ 6		; bit position of DIO
+	FDC_MSR_NDM_BIT		equ 5		; bit position of NDM
+	FDC_MSR_CB_BIT		equ 4		; bit position of CB
+	FDC_MSR_D3B_BIT		equ 3		; bit position of D3B
+	FDC_MSR_D2B_BIT		equ 2		; bit position of D2B
+	FDC_MSR_D1B_BIT		equ 1		; bit position of D1B
+	FDC_MSR_D0B_BIT		equ 0		; bit position of D0B
 
 	; ============================================================
 	; MOTOR CONTROL BITS  (write to FDC_PORT_MOTOR)
 	; ============================================================
 	FDC_MOTOR_A			equ #01		; bit 0: drive A motor on
-	FDC_MOTOR_B			equ #02		; bit 1: drive B motor on
+	FDC_MOTOR_B			equ #01		; bit 0: drive B motor on (CPC only has 1 motor bit for all drives)
 	FDC_MOTOR_OFF		equ #00		; all motors off
 
 	; ============================================================
@@ -180,6 +187,15 @@ __MACROS_FDC_ASM__ equ 1
 	FDC_ST0_HD				equ #04		; bit 2: head address at time of interrupt
 	FDC_ST0_DS1				equ #02		; bit 1: drive select bit 1
 	FDC_ST0_DS0				equ #01		; bit 0: drive select bit 0
+	; Bit positions for use with the Z80 BIT/SET/RES instructions
+	FDC_ST0_IC1_BIT		equ 7		; bit position of IC1
+	FDC_ST0_IC0_BIT		equ 6		; bit position of IC0
+	FDC_ST0_SE_BIT		equ 5		; bit position of SE (seek end)
+	FDC_ST0_EC_BIT		equ 4		; bit position of EC (equipment check)
+	FDC_ST0_NR_BIT		equ 3		; bit position of NR (not ready)
+	FDC_ST0_HD_BIT		equ 2		; bit position of HD
+	FDC_ST0_DS1_BIT		equ 1		; bit position of DS1
+	FDC_ST0_DS0_BIT		equ 0		; bit position of DS0
 
 	; ============================================================
 	; STATUS REGISTER 1 (ST1) BITS
@@ -266,410 +282,11 @@ __MACROS_FDC_ASM__ equ 1
 	; ============================================================
 	;
 	; The drive motor requires at least 300 ms to reach full speed after
-	; being switched on. The loop constant below targets ~320 ms at 4 MHz.
-	; Outer * (256 inner * 13 T djnz + ~22 T overhead) ~ 8.4 M T ~ 320 ms.
+	; being switched on. The loop constant below targets ~1000 ms at 4 MHz,
+	; matching Livingstone loader spin-up time for reliable motor lock.
+	; Outer * (256 inner * 13 T djnz + 33 T overhead) ~ 4.03 M T ~ 1000 ms.
 	;
-	FDC_MOTOR_SPINUP_LOOPS	equ 2500	; outer loop count for ~320 ms spin-up delay
+	FDC_MOTOR_SPINUP_LOOPS	equ 1200	; outer loop count for ~1000 ms spin-up delay
 
-	; ============================================================
-	; FDC_WaitRQM -- spin until the FDC Main Status Register shows RQM=1.
-	;
-	; Polls FDC_PORT_STATUS until bit 7 (RQM) is set, indicating the FDC is
-	; ready for the next data register transfer. Must be called before every
-	; read or write of the data register during command and result phases.
-	;
-	; Does not check DIO -- the caller is responsible for transferring in the
-	; correct direction after this macro returns.
-	;
-	; Destroys: A, B, C
-	; Preserves: DE, HL, IX, IY
-	;
-	; Speed: non-deterministic. Each poll = 12 T (in a,(c)) + 4 T (rla) + branch.
-	macro FDC_WaitRQM
-		ld bc,FDC_PORT_STATUS
-	@wait:
-		in a,(c)
-		rla
-		jr nc,@wait
-	endm
 
-	; ============================================================
-	; FDC_WaitRQM_Read -- spin until FDC is ready AND DIO=1 (FDC->CPU).
-	;
-	; Like FDC_WaitRQM but also confirms the transfer direction is FDC->CPU
-	; before returning. Use before reading a result byte from FDC_PORT_DATA.
-	;
-	; Destroys: A, B, C
-	; Preserves: DE, HL, IX, IY
-	;
-	; Speed: non-deterministic. Each poll ~ 28 T.
-	macro FDC_WaitRQM_Read
-		ld bc,FDC_PORT_STATUS
-	@wait:
-		in a,(c)
-		and FDC_MSR_RQM|FDC_MSR_DIO
-		cp FDC_MSR_RQM|FDC_MSR_DIO
-		jr nz,@wait
-	endm
-
-	; ============================================================
-	; FDC_WaitRQM_Write -- spin until RQM=1, then write one byte to the data register.
-	;
-	; Does NOT check DIO -- checking DIO causes an infinite loop when the FDC has
-	; stale result bytes (DIO=1). Just waiting for RQM=1 matches all three reference
-	; implementations (fdcload PUTFDC, DDFDC ddfdccom, ReadSectors PUTFDC).
-	; The byte to write must be in A on entry; it is preserved across the RQM poll
-	; via ex af,af'. The write goes to the data port via the inc c / dec c trick
-	; (C: &7E -> &7F -> &7E) without changing B, identical to the references.
-	;
-	; On entry: A = byte to write
-	; Destroys: A, A', B, C, F, F'
-	; Preserves: DE, HL, IX, IY
-	macro FDC_WaitRQM_Write
-		ex af,af'
-		ld bc,FDC_PORT_STATUS
-	@wait:
-		in a,(c)
-		jp p,@wait
-		ex af,af'
-		inc c
-		out (c),a
-		dec c
-		; inter-byte delay matching fdcload fwc3 (compatibility with all FDC variants)
-		ld a,5
-	@delay:
-		dec a
-		jr nz,@delay
-	endm
-
-	; ============================================================
-	; FDC_WriteByte -- wait for RQM=1, then write one byte to the FDC data register.
-	;
-	; Value may be a register (a, b, c, d, e, h, l) or an 8-bit constant.
-	; The value is loaded into A, then FDC_WaitRQM_Write handles poll + write.
-	;
-	; Destroys: A, A', B, C, F, F'
-	; Preserves: DE, HL, IX, IY
-	macro FDC_WriteByte Value
-		ld a,{Value}
-		FDC_WaitRQM_Write
-	endm
-
-	; ============================================================
-	; FDC_ReadByte -- wait for RQM (FDC->CPU) then read one byte from the data register.
-	;
-	; Combines FDC_WaitRQM_Read and the data register read into one macro.
-	; Result lands in A.
-	;
-	; Destroys: A, B, C
-	; Preserves: DE, HL, IX, IY
-	;
-	; Speed: poll loop (non-deterministic) + 7 T (ld b,DATA_B) + 12 T (in a,(c)).
-	macro FDC_ReadByte
-		FDC_WaitRQM_Read
-		ld b,FDC_PORT_DATA_B
-		in a,(c)
-	endm
-
-	; ============================================================
-	; FDC_ExecPhase -- drain all execution-phase bytes from FDC into (HL).
-	;
-	; Uses the reference tight loop (cpctech.cpcwiki.de/source/fdcload.html):
-	;   BC = FDC_PORT_STATUS (&FB7E); inc c / dec c switches between status
-	;   (&FB7E) and data (&FB7F) without changing B -- identical to the reference.
-	; Polls MSR with jp p (waits while RQM=0); tests NDM (bit 5) to detect end of
-	; execution phase; exits when NDM=0 (sector fully transferred by FDC).
-	; Every byte the FDC produces is written directly to (HL++) with no gating.
-	; The caller is responsible for tracking how many bytes have been consumed.
-	; Interrupts must be disabled by the caller before FDC_ExecPhase is invoked.
-	; An interrupt between bytes causes an FDC overrun (ST1 OR flag). The caller
-	; is responsible for di before the sector loop and ei after loading is complete.
-	;
-	; On entry:
-	;   HL = destination address
-	;   Interrupts must be disabled
-	;
-	; On exit:
-	;   HL = first address past the last byte written
-	;   BC = FDC_PORT_STATUS (ready for FDC_ResultPhase)
-	;   A  = last MSR value (NDM=0)
-	;
-	; Destroys: A, B, C, F
-	; Preserves: DE, IX, IY
-	;
-	macro FDC_ExecPhase
-		ld bc,FDC_PORT_STATUS
-	@poll:
-		in a,(c)
-		jp p,@poll
-		and FDC_MSR_NDM
-		jp z,@done
-		inc c
-		in a,(c)
-		dec c
-		ld (hl),a
-		inc hl
-		jp @poll
-	@done:
-	endm
-
-	; ============================================================
-	; FDC_ResultPhase -- read all result bytes from FDC; store first byte (ST0) in lb_result_st0.
-	;
-	; Uses the reference fdc_result pattern: polls MSR until RQM=1 and DIO=1
-	; (#C0), reads each byte, then checks CB (bit 4) to know when all result
-	; bytes have been consumed (CB=0 means FDC returned to idle).
-	; The first byte read (ST0) is stored in lb_result_st0 so callers can
-	; inspect it after the phase completes. Remaining bytes are discarded.
-	;
-	; A small 5-cycle delay between reads matches the reference timing.
-	;
-	; On exit:
-	;   lb_result_st0 = ST0 (first result byte)
-	;   BC = FDC_PORT_STATUS
-	;   A  = last MSR value (CB=0)
-	;
-	; Destroys: A, B, C, F
-	; Preserves: DE, HL, IX, IY
-	;
-	macro FDC_ResultPhase
-		ld bc,FDC_PORT_STATUS
-	@next:
-		in a,(c)
-		cp FDC_MSR_RQM|FDC_MSR_DIO
-		jr c,@next
-		inc c
-		in a,(c)
-		dec c
-		ld (lb_result_st0),a
-		ld a,5
-	@delay:
-		dec a
-		jr nz,@delay
-		in a,(c)
-		and FDC_MSR_CB
-		jr z,@done
-	@rest:
-		in a,(c)
-		cp FDC_MSR_RQM|FDC_MSR_DIO
-		jr c,@rest
-		inc c
-		in a,(c)
-		dec c
-		ld a,5
-	@delay2:
-		dec a
-		jr nz,@delay2
-		in a,(c)
-		and FDC_MSR_CB
-		jr nz,@rest
-	@done:
-	endm
-
-	; ============================================================
-	; FDC_MotorOn -- switch the motor on for the selected drive and wait for spin-up.
-	;
-	; Drive must be 0 (drive A) or 1 (drive B). After writing the motor latch
-	; the macro busy-waits for FDC_MOTOR_SPINUP_LOOPS iterations (~320 ms).
-	; This is the minimum safe delay before issuing any read or write command.
-	;
-	; Destroys: A, B, C, HL (used as outer loop counter)
-	; Preserves: DE, IX, IY
-	;
-	; Speed: ~320 ms at 4 MHz (deterministic delay, not bus-dependent).
-	macro FDC_MotorOn Drive
-		ld bc,FDC_PORT_MOTOR
-		if {Drive} == 0
-			ld a,FDC_MOTOR_A
-		else
-			ld a,FDC_MOTOR_B
-		endif
-		out (c),a
-		ld hl,FDC_MOTOR_SPINUP_LOOPS
-	@outer:
-		ld b,0
-	@inner:
-		djnz @inner
-		dec hl
-		ld a,h
-		or l
-		jr nz,@outer
-	endm
-
-	; ============================================================
-	; FDC_MotorOff -- switch all drive motors off.
-	;
-	; Destroys: A, B, C
-	; Preserves: DE, HL, IX, IY
-	macro FDC_MotorOff
-		ld bc,FDC_PORT_MOTOR
-		xor a
-		out (c),a
-	endm
-
-	; ============================================================
-	; FDC_MotorOn_R -- switch the motor on for the drive in A and wait for spin-up.
-	;
-	; Runtime variant of FDC_MotorOn. A must be 0 (drive A) or 1 (drive B) on entry.
-	; Selects FDC_MOTOR_A or FDC_MOTOR_B at runtime, writes the motor latch, then
-	; busy-waits FDC_MOTOR_SPINUP_LOOPS iterations (~320 ms).
-	;
-	; Destroys: A, B, C, HL (used as outer loop counter)
-	; Preserves: DE, IX, IY
-	;
-	; Speed: ~320 ms at 4 MHz (deterministic delay, not bus-dependent).
-	macro FDC_MotorOn_R
-		ld bc,FDC_PORT_MOTOR
-		or a
-		jr z,@drive_a
-		ld a,FDC_MOTOR_B
-		jr @do_motor
-	@drive_a:
-		ld a,FDC_MOTOR_A
-	@do_motor:
-		out (c),a
-		ld hl,FDC_MOTOR_SPINUP_LOOPS
-	@outer:
-		ld b,0
-	@inner:
-		djnz @inner
-		dec hl
-		ld a,h
-		or l
-		jr nz,@outer
-	endm
-
-	; ============================================================
-	; FDC_Specify -- issue the SPECIFY command with standard CPC timing values.
-	;
-	; Sends FDC_CMD_SPECIFY, FDC_SPECIFY_SRT_HUT, FDC_SPECIFY_HLT_ND.
-	; This configures:  SRT=6ms, HUT=240ms, HLT=4ms, ND=1 (non-DMA mode).
-	; Must be called once after FDC_Reset and before any seek or read/write.
-	;
-	; Destroys: A, B, C
-	; Preserves: DE, HL, IX, IY
-	macro FDC_Specify
-		FDC_WriteByte FDC_CMD_SPECIFY
-		FDC_WriteByte FDC_SPECIFY_SRT_HUT
-		FDC_WriteByte FDC_SPECIFY_HLT_ND
-	endm
-
-	; ============================================================
-	; FDC_Recalibrate -- seek drive to track 0 and confirm with SENSE INTERRUPT.
-	;
-	; Issues RECALIBRATE once, then polls SENSE INTERRUPT in a tight loop
-	; until SE (bit 5) is set. The outer @retry re-issues RECALIBRATE only
-	; when needed (some FDCs need two passes from beyond track 77).
-	; Polling SENSE_INT without re-issuing RECALIBRATE matches the reference.
-	;
-	; Drive must be 0 or 1.
-	;
-	; Destroys: A, A', B, C, F, F'
-	; Preserves: DE, HL, IX, IY
-	macro FDC_Recalibrate Drive
-	@retry:
-		FDC_WriteByte FDC_CMD_RECALIBRATE
-		FDC_WriteByte {Drive}
-	@sense:
-		FDC_WriteByte FDC_CMD_SENSE_INT
-		FDC_ResultPhase
-		ld a,(lb_result_st0)
-		bit 5,a
-		jr z,@sense
-	endm
-
-	; ============================================================
-	; FDC_Recalibrate_R -- seek drive to track 0, drive number from lb_drive.
-	;
-	; Drains any stale result bytes left by the firmware boot sequence, then
-	; issues RECALIBRATE + SENSE INTERRUPT. FDC_ResultPhase (CB-bit loop)
-	; waits until the FDC is done and reads all result bytes. The first result
-	; byte (ST0) is then read back to check SE (bit 5). Retries if not set.
-	;
-	; Destroys: A, A', B, C, F, F'
-	; Preserves: DE, HL, IX, IY
-	macro FDC_Recalibrate_R
-		; drain stale result bytes left by firmware: read while RQM=1 AND DIO=1 AND CB=1
-		ld bc,FDC_PORT_STATUS
-	@drain:
-		in a,(c)
-		and FDC_MSR_RQM|FDC_MSR_DIO|FDC_MSR_CB
-		cp FDC_MSR_RQM|FDC_MSR_DIO|FDC_MSR_CB
-		jr nz,@do_recal
-		inc c
-		in a,(c)
-		dec c
-		jr @drain
-	@do_recal:
-	@retry:
-		FDC_WriteByte FDC_CMD_RECALIBRATE
-		ld a,(lb_drive)
-		FDC_WaitRQM_Write
-	@sense:
-		FDC_WriteByte FDC_CMD_SENSE_INT
-		FDC_ResultPhase
-		ld a,(lb_result_st0)
-		bit 5,a
-		jr z,@sense
-	endm
-
-	; ============================================================
-	; FDC_Seek -- seek to a specific cylinder.
-	;
-	; Issues SEEK once, then polls SENSE INTERRUPT in a tight loop until
-	; SE (bit 5 of ST0) is set -- head positioned successfully.
-	; Polling SENSE_INT without re-issuing SEEK matches the reference
-	; (fdcload fdc_seek_or_recalibrate loop) and is required for tracks
-	; beyond track 1 where the physical seek takes many milliseconds.
-	;
-	; Drive must be 0 or 1. Head must be 0 (CPC standard discs are single-sided).
-	; Cylinder is the target track number (0-39).
-	;
-	; Destroys: A, A', B, C, F, F'
-	; Preserves: DE, HL, IX, IY
-	;
-	; Exit: A = ST0
-	macro FDC_Seek Drive, Head, Cylinder
-		FDC_WriteByte FDC_CMD_SEEK
-		FDC_WriteByte ({Head} << 2) | {Drive}
-		FDC_WriteByte {Cylinder}
-	@sense:
-		FDC_WriteByte FDC_CMD_SENSE_INT
-		FDC_ResultPhase
-		ld a,(lb_result_st0)
-		bit 5,a
-		jr z,@sense
-	endm
-
-	; ============================================================
-	; FDC_Seek_R -- seek to a cylinder, drive number from lb_drive.
-	;
-	; Runtime variant of FDC_Seek. Head is always 0. Cylinder must be in D.
-	; Issues SEEK once, then polls SENSE INTERRUPT in a tight loop until
-	; SE (bit 5 of ST0) is set. Re-issuing SEEK on each retry would abort
-	; the in-progress seek; only SENSE_INT is repeated until SE=1.
-	;
-	; Destroys: A, A', B, C, F, F'
-	; Preserves: DE, HL, IX, IY
-	;
-	; Exit: A = ST0 (SE=1 guaranteed)
-	macro FDC_Seek_R
-		FDC_WriteByte FDC_CMD_SEEK
-		ld a,(lb_drive)
-		FDC_WaitRQM_Write
-		FDC_WriteByte d
-	@sense:
-		FDC_WriteByte FDC_CMD_SENSE_INT
-		FDC_ResultPhase
-		ld a,(lb_result_st0)
-		bit 5,a
-		jr z,@sense
-	endm
-
-; ============================================================
-; Runtime macro variables
-; ============================================================
-lb_drive		db 0		; drive number: 0 = drive A, 1 = drive B
-lb_result_st0	db 0		; ST0 from last FDC_ResultPhase call
-
-ENDIF
+endif

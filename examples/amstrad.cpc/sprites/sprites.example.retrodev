@@ -1,4 +1,5 @@
 {
+   "version": 1,
    "ProjectName": "sprites.example",
    "images": [
       {
@@ -30,12 +31,6 @@
       },
       {
          "filePath": "$(sdk)/amstrad.cpc/macros/keyboard/macros.keyboard.asm"
-      },
-      {
-         "filePath": "$(sdk)/amstrad.cpc/functions/keyboard/cpc.keys.asm"
-      },
-      {
-         "filePath": "$(sdk)/amstrad.cpc/functions/keyboard/cpc.keyboard.asm"
       },
       {
          "filePath": "$(sdk)/amstrad.cpc/functions/system/cpc.interrupts.disable.asm"
@@ -143,7 +138,8 @@
                "TransparentColorR": 255,
                "TransparentColorG": 0,
                "TransparentColorB": 255,
-               "TransparentColorTolerance": 0
+               "TransparentColorTolerance": 0,
+               "TransparentPen": -1
             },
             "DParams": {
                "Method": "None",
@@ -179,98 +175,154 @@
                   "Y": 48,
                   "Width": 8,
                   "Height": 16,
-                  "Name": "Walk1"
+                  "Name": "Walk1",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 28,
                   "Y": 49,
                   "Width": 8,
                   "Height": 15,
-                  "Name": "Walk2"
+                  "Name": "Walk2",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 45,
                   "Y": 48,
                   "Width": 10,
                   "Height": 16,
-                  "Name": "Walk3"
+                  "Name": "Walk3",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 89,
                   "Y": 48,
                   "Width": 10,
                   "Height": 13,
-                  "Name": "Jump"
+                  "Name": "Jump",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 89,
                   "Y": 116,
                   "Width": 10,
                   "Height": 12,
-                  "Name": "Pickup"
+                  "Name": "Pickup",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 106,
                   "Y": 116,
                   "Width": 12,
                   "Height": 13,
-                  "Name": "Bend Down"
+                  "Name": "Bend Down",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 8,
                   "Y": 113,
                   "Width": 10,
                   "Height": 16,
-                  "Name": "Death1"
+                  "Name": "Death1",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 25,
                   "Y": 112,
                   "Width": 12,
                   "Height": 16,
-                  "Name": "Death2"
+                  "Name": "Death2",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 44,
                   "Y": 116,
                   "Width": 12,
                   "Height": 13,
-                  "Name": "Death3"
+                  "Name": "Death3",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 7,
                   "Y": 174,
                   "Width": 12,
                   "Height": 19,
-                  "Name": "Climb1"
+                  "Name": "Climb1",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 26,
                   "Y": 174,
                   "Width": 10,
                   "Height": 20,
-                  "Name": "Climb2"
+                  "Name": "Climb2",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 90,
                   "Y": 182,
                   "Width": 8,
                   "Height": 5,
-                  "Name": "Acid1"
+                  "Name": "Acid1",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 107,
                   "Y": 182,
                   "Width": 10,
                   "Height": 5,
-                  "Name": "Acid2"
+                  "Name": "Acid2",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                },
                {
                   "X": 10,
                   "Y": 48,
                   "Width": 8,
                   "Height": 16,
-                  "Name": "Walk1_fh"
+                  "Name": "Walk1_fh",
+                  "FlipH": false,
+                  "FlipV": false,
+                  "ShiftX": 0,
+                  "ShiftY": 0
                }
             ]
          },
@@ -332,6 +384,7 @@
       }
    ],
    "buildPalettes": [],
+   "buildRasters": [],
    "buildFolders": [],
    "selectedBuildItem": "sprites.build"
 }

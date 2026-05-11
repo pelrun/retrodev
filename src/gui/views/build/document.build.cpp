@@ -344,16 +344,17 @@ namespace RetrodevGui {
 		if (ImGui::BeginPopup("##DepPickerPopup")) {
 			static const RetrodevLib::ProjectBuildType k_depTypes[] = {
 				RetrodevLib::ProjectBuildType::Bitmap, RetrodevLib::ProjectBuildType::Tilemap, RetrodevLib::ProjectBuildType::Sprite,
-				RetrodevLib::ProjectBuildType::Map,	   RetrodevLib::ProjectBuildType::Palette,  RetrodevLib::ProjectBuildType::Build,
+				RetrodevLib::ProjectBuildType::Map,    RetrodevLib::ProjectBuildType::Palette,  RetrodevLib::ProjectBuildType::Raster,
+				RetrodevLib::ProjectBuildType::Build,
 			};
-			static const char* k_depTypeLabels[] = {"Bitmap", "Tileset", "Sprite", "Map", "Palette", "Build"};
+			static const char* k_depTypeLabels[] = {"Bitmap", "Tileset", "Sprite", "Map", "Palette", "Raster", "Build"};
 			bool anyAvailable = false;
 			//
 			// Child window with fixed max height for scrolling when list is long
 			//
 			float maxHeight = ImGui::GetFontSize() * 20.0f;
 			if (ImGui::BeginChild("##DepPickerList", ImVec2(ImGui::GetFontSize() * 30.0f, maxHeight), false)) {
-				for (int t = 0; t < 6; t++) {
+				for (int t = 0; t < 7; t++) {
 					std::vector<std::string> items = RetrodevLib::Project::GetBuildItemsByType(k_depTypes[t]);
 					for (const auto& item : items) {
 						//

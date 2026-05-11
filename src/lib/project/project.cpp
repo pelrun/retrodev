@@ -19,7 +19,9 @@
 #include <assets/palette/palette.h>
 #include <process/image/tile.pack.h>
 #include <assets/source/source.h>
+#include <generators/raster/amstrad.cpc/cpc.raster.h>
 #include <algorithm>
+#include <fstream>
 #include <unordered_set>
 
 namespace RetrodevLib {
@@ -36,6 +38,17 @@ namespace RetrodevLib {
 	// Used to store/expand the $(sdk) variable in project file paths.
 	//
 	static std::string s_sdkFolderPath;
+	//
+	// Step-based build state: flat ordered list of work items prepared by BuildPrepare.
+	//
+	enum class BuildWorkType { Dep, Assemble };
+	struct BuildWorkItem {
+		BuildWorkType type;
+		std::string name;
+		SourceParams params;
+	};
+	static std::vector<BuildWorkItem> s_buildWorkItems;
+	static size_t s_buildWorkIndex = 0;
 
 	//
 	// Prefix used in the project file to represent the SDK folder location.
@@ -454,6 +467,11 @@ namespace RetrodevLib {
 					result.push_back(entry.name);
 				}
 				break;
+			case ProjectBuildType::Raster:
+				for (const auto& entry : currentProject.buildRasters) {
+					result.push_back(entry.name);
+				}
+				break;
 			case ProjectBuildType::VirtualFolder:
 				break;
 		}
@@ -640,6 +658,8 @@ namespace RetrodevLib {
 				return BuildRename(oldName, newName);
 			case ProjectBuildType::Palette:
 				return PaletteRename(oldName, newName);
+			case ProjectBuildType::Raster:
+				return RasterRename(oldName, newName);
 			default:
 				return false;
 		}
@@ -1332,6 +1352,272 @@ namespace RetrodevLib {
 		return false;
 	}
 	//
+	// Process a single non-Build dependency (Bitmap, Sprite, Tileset, Map, Palette, Raster).
+	// Returns true on success (including skipped or unknown deps), false on error.
+	//
+	static bool ProcessNonBuildDepItem(const std::string& depName) {
+		GFXParams* params = nullptr;
+		//
+		// Bitmap dependency: load image, create converter, convert and export
+		//
+		if (Project::BitmapGetCfg(depName, &params) && params != nullptr) {
+			Log::Info(LogChannel::Build, "[Dep] Bitmap '%s': loading source image.", depName.c_str());
+			std::string sourcePath = Project::BitmapGetSourcePath(depName);
+			auto image = Image::ImageLoad(sourcePath);
+			if (!image) {
+				Log::Error(LogChannel::Build, "[Dep] Bitmap '%s': failed to load source image '%s'.", depName.c_str(), sourcePath.c_str());
+				return false;
+			}
+			auto converter = Converters::GetBitmapConverter(params);
+			if (!converter) {
+				Log::Error(LogChannel::Build, "[Dep] Bitmap '%s': no suitable converter for the given parameters.", depName.c_str());
+				return false;
+			}
+			converter->SetOriginal(image);
+			Log::Info(LogChannel::Build, "[Dep] Bitmap '%s': converting.", depName.c_str());
+			converter->Convert(params);
+			auto converted = converter->GetConverted(params);
+			if (!converted) {
+				Log::Error(LogChannel::Build, "[Dep] Bitmap '%s': conversion produced no output.", depName.c_str());
+				return false;
+			}
+			ExportParams* exportParams = nullptr;
+			Project::BitmapGetExportParams(depName, &exportParams);
+			if (!exportParams || exportParams->scriptPath.empty()) {
+				Log::Warning(LogChannel::Build, "[Dep] Bitmap '%s': no export script defined, skipping export.", depName.c_str());
+				return true;
+			}
+			std::string absScript = Project::ExpandPath(exportParams->scriptPath);
+			std::string absOutput = Project::ExpandPath(exportParams->outputName);
+			Log::Info(LogChannel::Build, "[Dep] Bitmap '%s': exporting to '%s'.", depName.c_str(), absOutput.c_str());
+			ExportEngine::Initialize();
+			if (!ExportEngine::ExportBitmap(absScript, absOutput, exportParams->scriptParams, converted.get(), converter.get(), params)) {
+				Log::Error(LogChannel::Build, "[Dep] Bitmap '%s': export script failed.", depName.c_str());
+				return false;
+			}
+			return true;
+		}
+		//
+		// Sprite dependency
+		//
+		if (Project::SpriteGetCfg(depName, &params) && params != nullptr) {
+			Log::Info(LogChannel::Build, "[Dep] Sprite '%s': loading source image.", depName.c_str());
+			std::string sourcePath = Project::SpriteGetSourcePath(depName);
+			auto image = Image::ImageLoad(sourcePath);
+			if (!image) {
+				Log::Error(LogChannel::Build, "[Dep] Sprite '%s': failed to load source image '%s'.", depName.c_str(), sourcePath.c_str());
+				return false;
+			}
+			auto converter = Converters::GetBitmapConverter(params);
+			if (!converter) {
+				Log::Error(LogChannel::Build, "[Dep] Sprite '%s': no suitable converter for the given parameters.", depName.c_str());
+				return false;
+			}
+			converter->SetOriginal(image);
+			Log::Info(LogChannel::Build, "[Dep] Sprite '%s': converting.", depName.c_str());
+			converter->Convert(params);
+			auto converted = converter->GetConverted(params);
+			if (!converted) {
+				Log::Error(LogChannel::Build, "[Dep] Sprite '%s': conversion produced no output.", depName.c_str());
+				return false;
+			}
+			SpriteExtractionParams* spriteParams = nullptr;
+			Project::SpriteGetSpriteParams(depName, &spriteParams);
+			auto spriteExtractor = converter->GetSpriteExtractor();
+			if (!spriteExtractor) {
+				Log::Error(LogChannel::Build, "[Dep] Sprite '%s': failed to allocate sprite extractor.", depName.c_str());
+				return false;
+			}
+			if (spriteParams) {
+				Log::Info(LogChannel::Build, "[Dep] Sprite '%s': extracting sprites.", depName.c_str());
+				spriteExtractor->Extract(converted, spriteParams);
+			}
+			ExportParams* exportParams = nullptr;
+			Project::SpriteGetExportParams(depName, &exportParams);
+			if (!exportParams || exportParams->scriptPath.empty()) {
+				Log::Warning(LogChannel::Build, "[Dep] Sprite '%s': no export script defined, skipping export.", depName.c_str());
+				return true;
+			}
+			std::string absScript = Project::ExpandPath(exportParams->scriptPath);
+			std::string absOutput = Project::ExpandPath(exportParams->outputName);
+			Log::Info(LogChannel::Build, "[Dep] Sprite '%s': exporting to '%s'.", depName.c_str(), absOutput.c_str());
+			ExportEngine::Initialize();
+			if (!ExportEngine::ExportSprites(absScript, absOutput, exportParams->scriptParams, converter.get(), params, spriteExtractor.get(), spriteParams)) {
+				Log::Error(LogChannel::Build, "[Dep] Sprite '%s': export script failed.", depName.c_str());
+				return false;
+			}
+			return true;
+		}
+		//
+		// Tileset dependency
+		//
+		if (Project::TilesetGetCfg(depName, &params) && params != nullptr) {
+			Log::Info(LogChannel::Build, "[Dep] Tileset '%s': loading source image.", depName.c_str());
+			std::string sourcePath = Project::TilesetGetSourcePath(depName);
+			auto image = Image::ImageLoad(sourcePath);
+			if (!image) {
+				Log::Error(LogChannel::Build, "[Dep] Tileset '%s': failed to load source image '%s'.", depName.c_str(), sourcePath.c_str());
+				return false;
+			}
+			auto converter = Converters::GetBitmapConverter(params);
+			if (!converter) {
+				Log::Error(LogChannel::Build, "[Dep] Tileset '%s': no suitable converter for the given parameters.", depName.c_str());
+				return false;
+			}
+			converter->SetOriginal(image);
+			Log::Info(LogChannel::Build, "[Dep] Tileset '%s': converting.", depName.c_str());
+			converter->Convert(params);
+			auto converted = converter->GetConverted(params);
+			if (!converted) {
+				Log::Error(LogChannel::Build, "[Dep] Tileset '%s': conversion produced no output.", depName.c_str());
+				return false;
+			}
+			TileExtractionParams* tileParams = nullptr;
+			Project::TilesetGetTileParams(depName, &tileParams);
+			auto tileExtractor = converter->GetTileExtractor();
+			if (!tileExtractor) {
+				Log::Error(LogChannel::Build, "[Dep] Tileset '%s': failed to allocate tile extractor.", depName.c_str());
+				return false;
+			}
+			if (tileParams) {
+				Log::Info(LogChannel::Build, "[Dep] Tileset '%s': extracting tiles.", depName.c_str());
+				//
+				// If Pack-to-Grid is enabled, run it on the converted image first
+				//
+				auto sourceForExtraction = converted;
+				if (tileParams->PackEnabled) {
+					Log::Info(LogChannel::Build, "[Dep] Tileset '%s': running Pack-to-Grid.", depName.c_str());
+					RgbColor bg(static_cast<uint8_t>(tileParams->PackBgR * 255.0f), static_cast<uint8_t>(tileParams->PackBgG * 255.0f),
+								static_cast<uint8_t>(tileParams->PackBgB * 255.0f));
+					auto packResult =
+						PackToGrid(converted, bg, tileParams->PackBgTolerance, tileParams->PackMergeGap, tileParams->PackCellPadding, tileParams->PackColumns);
+					if (packResult.packedImage) {
+						sourceForExtraction = packResult.packedImage;
+						tileParams->TileWidth = packResult.cellWidth;
+						tileParams->TileHeight = packResult.cellHeight;
+						tileParams->OffsetX = 0;
+						tileParams->OffsetY = 0;
+						tileParams->PaddingX = packResult.cellPadding;
+						tileParams->PaddingY = packResult.cellPadding;
+						Log::Info(LogChannel::Build, "[Dep] Tileset '%s': Pack-to-Grid produced %d region(s), cell %dx%d.", depName.c_str(), packResult.regionCount,
+								  packResult.cellWidth, packResult.cellHeight);
+					} else {
+						Log::Warning(LogChannel::Build, "[Dep] Tileset '%s': Pack-to-Grid found no regions -- using converter output.", depName.c_str());
+					}
+				}
+				tileExtractor->Extract(sourceForExtraction, tileParams);
+			}
+			ExportParams* exportParams = nullptr;
+			Project::TilesetGetExportParams(depName, &exportParams);
+			if (!exportParams || exportParams->scriptPath.empty()) {
+				Log::Warning(LogChannel::Build, "[Dep] Tileset '%s': no export script defined, skipping export.", depName.c_str());
+				return true;
+			}
+			std::string absScript = Project::ExpandPath(exportParams->scriptPath);
+			std::string absOutput = Project::ExpandPath(exportParams->outputName);
+			Log::Info(LogChannel::Build, "[Dep] Tileset '%s': exporting to '%s'.", depName.c_str(), absOutput.c_str());
+			ExportEngine::Initialize();
+			if (!ExportEngine::ExportTileset(absScript, absOutput, exportParams->scriptParams, converter.get(), params, tileExtractor.get(), tileParams)) {
+				Log::Error(LogChannel::Build, "[Dep] Tileset '%s': export script failed.", depName.c_str());
+				return false;
+			}
+			return true;
+		}
+		//
+		// Map dependency: grab params and call the exporter directly -- no image loading needed.
+		// Map data in currentProject is always compact (UI owns the absolute copy separately).
+		//
+		{
+			MapParams* mapParams = nullptr;
+			if (Project::MapGetParams(depName, &mapParams) && mapParams != nullptr) {
+				ExportParams* exportParams = nullptr;
+				Project::MapGetExportParams(depName, &exportParams);
+				if (!exportParams || exportParams->scriptPath.empty()) {
+					Log::Warning(LogChannel::Build, "[Dep] Map '%s': no export script defined, skipping export.", depName.c_str());
+					return true;
+				}
+				std::string absScript = Project::ExpandPath(exportParams->scriptPath);
+				std::string absOutput = Project::ExpandPath(exportParams->outputName);
+				Log::Info(LogChannel::Build, "[Dep] Map '%s': exporting to '%s'.", depName.c_str(), absOutput.c_str());
+				ExportEngine::Initialize();
+				if (!ExportEngine::ExportMap(absScript, absOutput, exportParams->scriptParams, mapParams)) {
+					Log::Error(LogChannel::Build, "[Dep] Map '%s': export script failed.", depName.c_str());
+					return false;
+				}
+				return true;
+			}
+		}
+		//
+		// Palette dependency: solve and validate palette assignments -- no export needed
+		//
+		{
+			PaletteParams* paletteParams = nullptr;
+			if (Project::PaletteGetParams(depName, &paletteParams) && paletteParams != nullptr) {
+				Log::Info(LogChannel::Build, "[Dep] Palette '%s': solving.", depName.c_str());
+				std::string projectFolder = std::filesystem::path(currentProjectPath).parent_path().string();
+				PaletteSolution solution = PaletteSolver::Solve(paletteParams, projectFolder);
+				if (!solution.valid && !paletteParams->userValidated) {
+					//
+					// No perfect fit and the user has not accepted an imperfect solution -- stop the build.
+					//
+					Log::Error(LogChannel::Build,
+							   "[Dep] Palette '%s': no valid solution found and palette has not been user-validated. Run Solve + Validate in the palette editor.",
+							   depName.c_str());
+					return false;
+				}
+				if (!solution.valid && paletteParams->userValidated)
+					Log::Warning(LogChannel::Build, "[Dep] Palette '%s': imperfect solution (overflow remaps applied) -- using user-validated assignments.",
+								 depName.c_str());
+				else
+					Log::Info(LogChannel::Build, "[Dep] Palette '%s': solution found, validating.", depName.c_str());
+				PaletteSolver::Validate(solution, paletteParams);
+				return true;
+			}
+		}
+		//
+		// Raster dependency: load project, generate Z80 assembly code and write to configured output path
+		//
+		{
+			RasterParams* rasterParams = nullptr;
+			if (Project::RasterGetParams(depName, &rasterParams) && rasterParams != nullptr) {
+				Log::Info(LogChannel::Build, "[Dep] Raster '%s': loading.", depName.c_str());
+				CPCRaster raster;
+				raster.LoadProject(*rasterParams);
+				Log::Info(LogChannel::Build, "[Dep] Raster '%s': validating.", depName.c_str());
+				CpcValidationResult validationResult;
+				raster.Validate(validationResult);
+				for (const auto& e : validationResult.entries) {
+					if (e.severity == CpcValidationSeverity::Error) {
+						Log::Error(LogChannel::Build, "[Dep] Raster '%s': validation error: %s", depName.c_str(), e.message.c_str());
+						return false;
+					}
+					Log::Warning(LogChannel::Build, "[Dep] Raster '%s': %s", depName.c_str(), e.message.c_str());
+				}
+				Log::Info(LogChannel::Build, "[Dep] Raster '%s': generating code.", depName.c_str());
+				std::string asmCode = raster.GenerateCode();
+				if (asmCode.empty()) {
+					Log::Error(LogChannel::Build, "[Dep] Raster '%s': code generation produced no output.", depName.c_str());
+					return false;
+				}
+				CpcRasterParams& cpcConfig = raster.GetCpcConfig();
+				if (cpcConfig.outputAsmPath.empty()) {
+					Log::Warning(LogChannel::Build, "[Dep] Raster '%s': no output path configured, skipping write.", depName.c_str());
+					return true;
+				}
+				std::string absOutput = Project::ExpandPath(cpcConfig.outputAsmPath);
+				Log::Info(LogChannel::Build, "[Dep] Raster '%s': writing to '%s'.", depName.c_str(), absOutput.c_str());
+				std::ofstream outFile(absOutput);
+				if (!outFile.is_open()) {
+					Log::Error(LogChannel::Build, "[Dep] Raster '%s': failed to open output file '%s'.", depName.c_str(), absOutput.c_str());
+					return false;
+				}
+				outFile << asmCode;
+				return true;
+			}
+		}
+		return true;
+	}
+	//
 	// Process all dependencies listed in the build item's SourceParams in order.
 	// Each dependency is resolved by type (Bitmap, Sprite, Tileset, Map, Palette),
 	// converted and exported as appropriate, with progress and errors logged on LogChannel::Build.
@@ -1342,255 +1628,101 @@ namespace RetrodevLib {
 		for (const auto& entry : currentProject.buildBuilds) {
 			if (entry.name == name) {
 				for (const auto& depName : entry.sourceParams.dependencies) {
-					GFXParams* params = nullptr;
-					//
-					// Bitmap dependency: load image, create converter, convert and export
-					//
-					if (BitmapGetCfg(depName, &params) && params != nullptr) {
-							Log::Info(LogChannel::Build, "[Dep] Bitmap '%s': loading source image.", depName.c_str());
-							std::string sourcePath = BitmapGetSourcePath(depName);
-							auto image = Image::ImageLoad(sourcePath);
-							if (!image) {
-								Log::Error(LogChannel::Build, "[Dep] Bitmap '%s': failed to load source image '%s'.", depName.c_str(), sourcePath.c_str());
-								return false;
-							}
-							auto converter = Converters::GetBitmapConverter(params);
-							if (!converter) {
-								Log::Error(LogChannel::Build, "[Dep] Bitmap '%s': no suitable converter for the given parameters.", depName.c_str());
-								return false;
-							}
-							converter->SetOriginal(image);
-							Log::Info(LogChannel::Build, "[Dep] Bitmap '%s': converting.", depName.c_str());
-							converter->Convert(params);
-							auto converted = converter->GetConverted(params);
-							if (!converted) {
-								Log::Error(LogChannel::Build, "[Dep] Bitmap '%s': conversion produced no output.", depName.c_str());
-								return false;
-							}
-						ExportParams* exportParams = nullptr;
-						BitmapGetExportParams(depName, &exportParams);
-						if (!exportParams || exportParams->scriptPath.empty()) {
-							Log::Warning(LogChannel::Build, "[Dep] Bitmap '%s': no export script defined, skipping export.", depName.c_str());
-							continue;
-						}
-						std::string absScript = ExpandPath(exportParams->scriptPath);
-						std::string absOutput = ExpandPath(exportParams->outputName);
-						Log::Info(LogChannel::Build, "[Dep] Bitmap '%s': exporting to '%s'.", depName.c_str(), absOutput.c_str());
-						ExportEngine::Initialize();
-						if (!ExportEngine::ExportBitmap(absScript, absOutput, exportParams->scriptParams, converted.get(), converter.get(), params)) {
-							Log::Error(LogChannel::Build, "[Dep] Bitmap '%s': export script failed.", depName.c_str());
+					SourceParams* depBuildParams = nullptr;
+					if (BuildGetParams(depName, &depBuildParams) && depBuildParams != nullptr) {
+						Log::Info(LogChannel::Build, "[Dep] Build '%s': processing dependencies.", depName.c_str());
+						if (!BuildProcessDependencies(depName)) {
+							Log::Error(LogChannel::Build, "[Dep] Build '%s': dependency processing failed.", depName.c_str());
 							return false;
 						}
-						continue;
-					}
-					//
-					// Sprite dependency
-					//
-					if (SpriteGetCfg(depName, &params) && params != nullptr) {
-						Log::Info(LogChannel::Build, "[Dep] Sprite '%s': loading source image.", depName.c_str());
-							std::string sourcePath = SpriteGetSourcePath(depName);
-							auto image = Image::ImageLoad(sourcePath);
-							if (!image) {
-								Log::Error(LogChannel::Build, "[Dep] Sprite '%s': failed to load source image '%s'.", depName.c_str(), sourcePath.c_str());
-								return false;
-							}
-							auto converter = Converters::GetBitmapConverter(params);
-							if (!converter) {
-								Log::Error(LogChannel::Build, "[Dep] Sprite '%s': no suitable converter for the given parameters.", depName.c_str());
-								return false;
-							}
-							converter->SetOriginal(image);
-							Log::Info(LogChannel::Build, "[Dep] Sprite '%s': converting.", depName.c_str());
-							converter->Convert(params);
-							auto converted = converter->GetConverted(params);
-							if (!converted) {
-								Log::Error(LogChannel::Build, "[Dep] Sprite '%s': conversion produced no output.", depName.c_str());
-								return false;
-							}
-							SpriteExtractionParams* spriteParams = nullptr;
-							SpriteGetSpriteParams(depName, &spriteParams);
-							auto spriteExtractor = converter->GetSpriteExtractor();
-							if (!spriteExtractor) {
-								Log::Error(LogChannel::Build, "[Dep] Sprite '%s': failed to allocate sprite extractor.", depName.c_str());
-								return false;
-							}
-						if (spriteParams) {
-							Log::Info(LogChannel::Build, "[Dep] Sprite '%s': extracting sprites.", depName.c_str());
-							spriteExtractor->Extract(converted, spriteParams);
-						}
-						ExportParams* exportParams = nullptr;
-						SpriteGetExportParams(depName, &exportParams);
-						if (!exportParams || exportParams->scriptPath.empty()) {
-							Log::Warning(LogChannel::Build, "[Dep] Sprite '%s': no export script defined, skipping export.", depName.c_str());
-							continue;
-						}
-						std::string absScript = ExpandPath(exportParams->scriptPath);
-						std::string absOutput = ExpandPath(exportParams->outputName);
-						Log::Info(LogChannel::Build, "[Dep] Sprite '%s': exporting to '%s'.", depName.c_str(), absOutput.c_str());
-						ExportEngine::Initialize();
-						if (!ExportEngine::ExportSprites(absScript, absOutput, exportParams->scriptParams, converter.get(), params, spriteExtractor.get(), spriteParams)) {
-							Log::Error(LogChannel::Build, "[Dep] Sprite '%s': export script failed.", depName.c_str());
+						Log::Info(LogChannel::Build, "[Dep] Build '%s': executing build.", depName.c_str());
+						if (!SourceBuild::Build(depBuildParams)) {
+							Log::Error(LogChannel::Build, "[Dep] Build '%s': build failed.", depName.c_str());
 							return false;
 						}
-						continue;
-					}
-					//
-					// Tileset dependency
-					//
-					if (TilesetGetCfg(depName, &params) && params != nullptr) {
-						Log::Info(LogChannel::Build, "[Dep] Tileset '%s': loading source image.", depName.c_str());
-							std::string sourcePath = TilesetGetSourcePath(depName);
-							auto image = Image::ImageLoad(sourcePath);
-							if (!image) {
-								Log::Error(LogChannel::Build, "[Dep] Tileset '%s': failed to load source image '%s'.", depName.c_str(), sourcePath.c_str());
-								return false;
-							}
-							auto converter = Converters::GetBitmapConverter(params);
-							if (!converter) {
-								Log::Error(LogChannel::Build, "[Dep] Tileset '%s': no suitable converter for the given parameters.", depName.c_str());
-								return false;
-							}
-							converter->SetOriginal(image);
-							Log::Info(LogChannel::Build, "[Dep] Tileset '%s': converting.", depName.c_str());
-							converter->Convert(params);
-							auto converted = converter->GetConverted(params);
-							if (!converted) {
-								Log::Error(LogChannel::Build, "[Dep] Tileset '%s': conversion produced no output.", depName.c_str());
-								return false;
-							}
-							TileExtractionParams* tileParams = nullptr;
-							TilesetGetTileParams(depName, &tileParams);
-							auto tileExtractor = converter->GetTileExtractor();
-							if (!tileExtractor) {
-								Log::Error(LogChannel::Build, "[Dep] Tileset '%s': failed to allocate tile extractor.", depName.c_str());
-								return false;
-							}
-						if (tileParams) {
-							Log::Info(LogChannel::Build, "[Dep] Tileset '%s': extracting tiles.", depName.c_str());
-							//
-							// If Pack-to-Grid is enabled, run it on the converted image first
-							//
-							auto sourceForExtraction = converted;
-							if (tileParams->PackEnabled) {
-								Log::Info(LogChannel::Build, "[Dep] Tileset '%s': running Pack-to-Grid.", depName.c_str());
-								RgbColor bg(static_cast<uint8_t>(tileParams->PackBgR * 255.0f), static_cast<uint8_t>(tileParams->PackBgG * 255.0f),
-											static_cast<uint8_t>(tileParams->PackBgB * 255.0f));
-								auto packResult =
-									PackToGrid(converted, bg, tileParams->PackBgTolerance, tileParams->PackMergeGap, tileParams->PackCellPadding, tileParams->PackColumns);
-								if (packResult.packedImage) {
-									sourceForExtraction = packResult.packedImage;
-									tileParams->TileWidth = packResult.cellWidth;
-									tileParams->TileHeight = packResult.cellHeight;
-									tileParams->OffsetX = 0;
-									tileParams->OffsetY = 0;
-									tileParams->PaddingX = packResult.cellPadding;
-									tileParams->PaddingY = packResult.cellPadding;
-									Log::Info(LogChannel::Build, "[Dep] Tileset '%s': Pack-to-Grid produced %d region(s), cell %dx%d.", depName.c_str(), packResult.regionCount,
-											  packResult.cellWidth, packResult.cellHeight);
-								} else {
-									Log::Warning(LogChannel::Build, "[Dep] Tileset '%s': Pack-to-Grid found no regions -- using converter output.", depName.c_str());
-								}
-							}
-							tileExtractor->Extract(sourceForExtraction, tileParams);
-						}
-						ExportParams* exportParams = nullptr;
-						TilesetGetExportParams(depName, &exportParams);
-						if (!exportParams || exportParams->scriptPath.empty()) {
-							Log::Warning(LogChannel::Build, "[Dep] Tileset '%s': no export script defined, skipping export.", depName.c_str());
-							continue;
-						}
-						std::string absScript = ExpandPath(exportParams->scriptPath);
-						std::string absOutput = ExpandPath(exportParams->outputName);
-						Log::Info(LogChannel::Build, "[Dep] Tileset '%s': exporting to '%s'.", depName.c_str(), absOutput.c_str());
-						ExportEngine::Initialize();
-						if (!ExportEngine::ExportTileset(absScript, absOutput, exportParams->scriptParams, converter.get(), params, tileExtractor.get(), tileParams)) {
-							Log::Error(LogChannel::Build, "[Dep] Tileset '%s': export script failed.", depName.c_str());
+						Log::Info(LogChannel::Build, "[Dep] Build '%s': complete.", depName.c_str());
+					} else {
+						if (!ProcessNonBuildDepItem(depName))
 							return false;
-						}
-						continue;
-					}
-					//
-					// Map dependency: grab params and call the exporter directly -- no image loading needed.
-					// Map data in currentProject is always compact (UI owns the absolute copy separately).
-					//
-					{
-						MapParams* mapParams = nullptr;
-						if (MapGetParams(depName, &mapParams) && mapParams != nullptr) {
-							ExportParams* exportParams = nullptr;
-							MapGetExportParams(depName, &exportParams);
-							if (!exportParams || exportParams->scriptPath.empty()) {
-								Log::Warning(LogChannel::Build, "[Dep] Map '%s': no export script defined, skipping export.", depName.c_str());
-								continue;
-							}
-							std::string absScript = ExpandPath(exportParams->scriptPath);
-							std::string absOutput = ExpandPath(exportParams->outputName);
-							Log::Info(LogChannel::Build, "[Dep] Map '%s': exporting to '%s'.", depName.c_str(), absOutput.c_str());
-							ExportEngine::Initialize();
-							if (!ExportEngine::ExportMap(absScript, absOutput, exportParams->scriptParams, mapParams)) {
-								Log::Error(LogChannel::Build, "[Dep] Map '%s': export script failed.", depName.c_str());
-								return false;
-							}
-							continue;
-						}
-					}
-					//
-					// Palette dependency: solve and validate palette assignments -- no export needed
-					//
-					{
-						PaletteParams* paletteParams = nullptr;
-						if (PaletteGetParams(depName, &paletteParams) && paletteParams != nullptr) {
-							Log::Info(LogChannel::Build, "[Dep] Palette '%s': solving.", depName.c_str());
-							std::string projectFolder = std::filesystem::path(currentProjectPath).parent_path().string();
-							PaletteSolution solution = PaletteSolver::Solve(paletteParams, projectFolder);
-							if (!solution.valid && !paletteParams->userValidated) {
-									//
-									// No perfect fit and the user has not accepted an imperfect solution -- stop the build.
-									//
-									Log::Error(LogChannel::Build,
-											   "[Dep] Palette '%s': no valid solution found and palette has not been user-validated. Run Solve + Validate in the palette editor.",
-											   depName.c_str());
-									return false;
-								}
-							if (!solution.valid && paletteParams->userValidated)
-								Log::Warning(LogChannel::Build, "[Dep] Palette '%s': imperfect solution (overflow remaps applied) -- using user-validated assignments.",
-											 depName.c_str());
-							else
-								Log::Info(LogChannel::Build, "[Dep] Palette '%s': solution found, validating.", depName.c_str());
-							PaletteSolver::Validate(solution, paletteParams);
-							continue;
-						}
-					}
-					//
-					// Build dependency: recursively process the dependency build's own dependencies, then execute it
-					//
-					{
-						SourceParams* depBuildParams = nullptr;
-						if (BuildGetParams(depName, &depBuildParams) && depBuildParams != nullptr) {
-							Log::Info(LogChannel::Build, "[Dep] Build '%s': processing dependencies.", depName.c_str());
-							//
-							// Recursive call: process the dependency build's dependencies first
-							//
-							if (!BuildProcessDependencies(depName)) {
-								Log::Error(LogChannel::Build, "[Dep] Build '%s': dependency processing failed.", depName.c_str());
-								return false;
-							}
-							//
-							// Now actually build/assemble the dependency build item itself
-							//
-							Log::Info(LogChannel::Build, "[Dep] Build '%s': executing build.", depName.c_str());
-							if (!SourceBuild::Build(depBuildParams)) {
-								Log::Error(LogChannel::Build, "[Dep] Build '%s': build failed.", depName.c_str());
-								return false;
-							}
-							Log::Info(LogChannel::Build, "[Dep] Build '%s': complete.", depName.c_str());
-							continue;
-						}
 					}
 				}
 				return true;
 			}
 		}
 		return false;
+	}
+	//
+	// Recursively flatten the dependency tree for a build item into an ordered list of work items.
+	// Build deps are recursively expanded (depth-first); non-Build deps become Dep work items.
+	// The Assemble item for `name` is appended last so all its deps run first.
+	// Diamond deps are silently skipped (visited set).
+	//
+	static bool FlattenBuildWork(const std::string& name, std::unordered_set<std::string>& visited, std::vector<BuildWorkItem>& out) {
+		if (visited.count(name))
+			return true;
+		visited.insert(name);
+		for (const auto& entry : currentProject.buildBuilds) {
+			if (entry.name != name)
+				continue;
+			for (const auto& depName : entry.sourceParams.dependencies) {
+				SourceParams* depBuildParams = nullptr;
+				if (Project::BuildGetParams(depName, &depBuildParams) && depBuildParams != nullptr) {
+					if (!FlattenBuildWork(depName, visited, out))
+						return false;
+				} else {
+					BuildWorkItem item;
+					item.type = BuildWorkType::Dep;
+					item.name = depName;
+					out.push_back(std::move(item));
+				}
+			}
+			BuildWorkItem item;
+			item.type = BuildWorkType::Assemble;
+			item.name = name;
+			item.params = entry.sourceParams;
+			out.push_back(std::move(item));
+			return true;
+		}
+		Log::Error(LogChannel::Build, "[Build] Build item '%s' not found.", name.c_str());
+		return false;
+	}
+	//
+	// Flatten the full dependency tree for buildItemName into s_buildWorkItems.
+	// Must be called once before calling BuildStep().
+	//
+	bool Project::BuildPrepare(const std::string& buildItemName) {
+		s_buildWorkItems.clear();
+		s_buildWorkIndex = 0;
+		if (!isProjectOpen) {
+			Log::Error(LogChannel::Build, "[Build] No project open.");
+			return false;
+		}
+		std::unordered_set<std::string> visited;
+		if (!FlattenBuildWork(buildItemName, visited, s_buildWorkItems)) {
+			s_buildWorkItems.clear();
+			return false;
+		}
+		Log::Info(LogChannel::Build, "[Build] Prepared %zu step(s) for '%s'.", s_buildWorkItems.size(), buildItemName.c_str());
+		return true;
+	}
+	//
+	// Execute the next pending work item. Returns Succeeded when the last item completes,
+	// Running while items remain, Failed if an item fails.
+	//
+	Project::BuildStepStatus Project::BuildStep() {
+		if (s_buildWorkIndex >= s_buildWorkItems.size())
+			return BuildStepStatus::Succeeded;
+		const BuildWorkItem& item = s_buildWorkItems[s_buildWorkIndex++];
+		bool ok = false;
+		if (item.type == BuildWorkType::Dep)
+			ok = ProcessNonBuildDepItem(item.name);
+		else
+			ok = SourceBuild::Build(&item.params);
+		if (!ok)
+			return BuildStepStatus::Failed;
+		if (s_buildWorkIndex >= s_buildWorkItems.size())
+			return BuildStepStatus::Succeeded;
+		return BuildStepStatus::Running;
 	}
 	//
 	// Helper: recursively collect all dependencies of a build item (including transitive deps).
@@ -1836,6 +1968,86 @@ namespace RetrodevLib {
 			if (entry.name == oldName) {
 				entry.name = newName;
 				isProjectModified = true;
+				return true;
+			}
+		}
+		return false;
+	}
+	//
+	// Add a raster build item to the current project
+	//
+	bool Project::RasterAdd(const std::string& name) {
+		if (!isProjectOpen)
+			return false;
+		for (const auto& entry : currentProject.buildRasters) {
+			if (entry.name == name)
+				return false;
+		}
+		ProjectBuildRasterEntry entry;
+		entry.name = name;
+		currentProject.buildRasters.push_back(entry);
+		isProjectModified = true;
+		return true;
+	}
+	//
+	// Remove a raster build item from the current project
+	//
+	bool Project::RasterRemove(const std::string& name) {
+		if (!isProjectOpen)
+			return false;
+		for (auto it = currentProject.buildRasters.begin(); it != currentProject.buildRasters.end(); ++it) {
+			if (it->name == name) {
+				currentProject.buildRasters.erase(it);
+				isProjectModified = true;
+				return true;
+			}
+		}
+		return false;
+	}
+	//
+	// Get parameters for a raster build item
+	//
+	bool Project::RasterGetParams(const std::string& name, RasterParams** params) {
+		if (!isProjectOpen)
+			return false;
+		for (auto& entry : currentProject.buildRasters) {
+			if (entry.name == name) {
+				if (params != nullptr)
+					*params = &entry.rasterParams;
+				return true;
+			}
+		}
+		return false;
+	}
+	//
+	// Rename a raster build item in the current project
+	//
+	bool Project::RasterRename(const std::string& oldName, const std::string& newName) {
+		if (!isProjectOpen)
+			return false;
+		for (const auto& entry : currentProject.buildRasters) {
+			if (entry.name == newName)
+				return false;
+		}
+		for (auto& entry : currentProject.buildRasters) {
+			if (entry.name == oldName) {
+				entry.name = newName;
+				isProjectModified = true;
+				return true;
+			}
+		}
+		return false;
+	}
+	//
+	// Get export parameters for a raster build item
+	//
+	bool Project::RasterGetExportParams(const std::string& name, ExportParams** exportParams) {
+		if (!isProjectOpen)
+			return false;
+		for (auto& entry : currentProject.buildRasters) {
+			if (entry.name == name) {
+				if (exportParams != nullptr)
+					*exportParams = &entry.rasterParams.exportParams;
 				return true;
 			}
 		}

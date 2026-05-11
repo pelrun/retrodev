@@ -155,8 +155,9 @@ namespace RetrodevGui {
 	//
 	void DocumentsView::SaveAllModified() {
 		for (auto& doc : documents) {
-			if (doc->IsModified())
+			if (doc->IsModified()) {
 				doc->Save();
+			}
 		}
 	}
 	//

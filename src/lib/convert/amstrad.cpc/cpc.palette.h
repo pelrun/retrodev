@@ -207,6 +207,11 @@ namespace RetrodevLib::ConverterAmstradCPC {
 		std::vector<bool> m_defaultLocked;
 		std::vector<bool> m_defaultEnabled;
 		//
+		// True after the first SetLockEnableArrays call; used to decide whether to
+		// write-back internal state to params before re-reading (see SetLockEnableArrays).
+		//
+		bool m_syncedFromParams;
+		//
 		// Current palette type ("GA Palette" or "ASIC Palette")
 		//
 		std::string m_paletteType;

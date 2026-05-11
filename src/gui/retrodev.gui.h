@@ -19,6 +19,7 @@
 #include <imgui.splitter.h>
 #include <imgui.zoomable.image.h>
 #include <imgui.filedialog.h>
+#include <imgui.text.editor.h>
 #include <SDL3/SDL.h>
 
 //

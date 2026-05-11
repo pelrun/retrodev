@@ -22,7 +22,6 @@ namespace RetrodevLib {
 		// defines:     preprocessor defines injected before assembly (e.g. "MYFLAG=1")
 		// toolOpts:    raw CLI options string from SourceParams::toolOptions["RASM"]
 		// projectDir:  absolute path to the project folder (used to resolve relative paths)
-		// All diagnostics are emitted via Log on LogChannel::Build.
 		// Returns true if assembly succeeded with no errors.
 		//
 		bool Build(const std::string& source, const std::vector<std::string>& includeDirs, const std::vector<std::string>& defines, const std::string& toolOpts,

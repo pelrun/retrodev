@@ -44,6 +44,7 @@ namespace RetrodevLib::ConverterAmstradCPC {
 		m_defaultEnabled.assign(17, true);
 		m_paletteLocked = &m_defaultLocked;
 		m_paletteEnabled = &m_defaultEnabled;
+		m_syncedFromParams = false;
 	}
 
 	//
@@ -472,12 +473,26 @@ namespace RetrodevLib::ConverterAmstradCPC {
 	//
 	void CPCPalette::SetLockEnableArrays(std::vector<bool>& locked, std::vector<bool>& enabled) {
 		int penCount = PaletteMaxColors();
-		if ((int)locked.size() < penCount)
-			locked.resize(penCount, false);
-		if ((int)enabled.size() < penCount)
-			enabled.resize(penCount, true);
-		m_paletteLocked = &locked;
-		m_paletteEnabled = &enabled;
+		//
+		// Write-back any pending PenLock/PenEnable changes to params before re-syncing.
+		// Skipped on first call (m_syncedFromParams == false) so the initial project state
+		// is read from params rather than overwritten by the default-false/true values.
+		// This also prevents dangling pointers: m_paletteLocked always points to
+		// m_defaultLocked (a stable member), never into buildTiles which can reallocate.
+		//
+		if (m_syncedFromParams) {
+			locked.assign(m_defaultLocked.begin(), m_defaultLocked.end());
+			enabled.assign(m_defaultEnabled.begin(), m_defaultEnabled.end());
+		}
+		m_defaultLocked = locked;
+		m_defaultEnabled = enabled;
+		if ((int)m_defaultLocked.size() < penCount)
+			m_defaultLocked.resize(penCount, false);
+		if ((int)m_defaultEnabled.size() < penCount)
+			m_defaultEnabled.resize(penCount, true);
+		m_paletteLocked = &m_defaultLocked;
+		m_paletteEnabled = &m_defaultEnabled;
+		m_syncedFromParams = true;
 	}
 
 	//

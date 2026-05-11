@@ -8,99 +8,158 @@
 ;
 ;-----------------------------------------------------------------------
 
-IFNDEF __CPC_DETECT_RAM_ASM__
-__CPC_DETECT_RAM_ASM__ equ 1
+ifndef __cpc_detect_ram_asm__
+__cpc_detect_ram_asm__ equ 1
+    ;
+    ; Require macros.ga.asm
+    ;
+    include "macros.ga.asm"
+    ;
+    ; CPC_DetectRAM
+    ;
+    ; Detects total distinct 64K RAM blocks available to the system, accounting
+    ; for base memory and Amstrad CPC memory mirror mapping behaviour.
+    ;
+    ; Unexpanded systems mirror base memory into expansion memory slots,
+    ; while expanded systems (e.g. 128K) mirror their expansion pages across
+    ; undefined additional expansions (pages 1..7 mirror page 0). To accurately
+    ; count independent physical banks without false positives from aliases,
+    ; a Unique Identifier approach is used.
+    ;
+    ; 1. A unique ID is written to Base Memory (Config 0).
+    ; 2. Sequential unique IDs are written to Extra Pages 0..7 (Config 1).
+    ; 3. Because memory aliases blindly overwrite each other sequentially, reading
+    ;    back these 9 test addresses will only match the "last" alias that targeted
+    ;    that physical memory block.
+    ; 4. Counting the exact matches gives the precise number of discrete 64K blocks!
+    ; 5. Original data is non-destructively restored afterwards seamlessly.
+    ;
+    ; The total RAM size returned is:
+    ;   64   -- 64K base RAM only (CPC 464, 664)
+    ;   128  -- 128K: Base + 1 extra 64K page confirmed (standard 6128 / CPC+)
+    ;   ... plus 64 for each distinct extra page up to a theoretical 576K.
+    ;
+    ; Important: this routine briefly maps extra RAM into slot 3 (#C000-#FFFF)
+    ; displacing the upper ROM / normal bank 3 for a few instructions. Interrupts
+    ; MUST be disabled before calling and re-enabled after if required.
+    ;
+    ; Entry:
+    ;   none
+    ; Exit:
+    ;   HL = total RAM size in kilobytes (64, 128, 192, 256, 320, 384, 448, 512, 576)
+    ; Destroys: AF, BC, D, E, HL, IXL
+    ; Preserves: IXH, IY
+    ; Requirements: interrupts must be disabled (DI) before calling.
 
-; Require macros.ga.asm to be included before this file.
-IFNDEF __MACROS_GA_ASM__
-FAIL 'cpc.detect.ram.asm requires macros.ga.asm to be included first'
-ENDIF
+    ; CPC_DetectRAM -- detect total RAM fitted (64K..576K) via unique ID alias resolution.
+    ; Entry: none  (interrupts must be disabled)
+    ; Exit:  HL = total RAM in kilobytes (64..576)
+    ; Destroys: AF, BC, DE, HL, IXL  Preserves: IXH, IY
+    CPC_DetectRAM:
+        ; Phase 0: Save Base RAM byte and tag it
+        ld b,#7f
+        ld c,GA_CMD_RAM_BANK+GA_RAM_CFG_0
+        out (c),c
 
-; CPC_DetectRAM
-;
-; Tests for the presence of the 64K extra RAM bank by writing a test value to
-; the first byte of extra bank 7 (mapped into slot 3 at #C000 via GA config 1),
-; then reading it back. If the written value is returned, extra RAM is fitted and
-; the machine has 128K or more. If the read-back does not match, only 64K is present.
-;
-; Machines with more than 128K (DK'Tronics 256K, CPC+ ASIC with 128K) can be
-; distinguished by iterating through GA_RAM_PAGE_1..7 in the same way, testing
-; each extra 64K block in turn and counting the confirmed pages.
-;
-; The total RAM size returned is:
-;   64   -- 64K base RAM only (CPC 464, 664, or 6128 with no extra RAM detected)
-;   128  -- 128K: one extra 64K page confirmed (standard 6128 / CPC+)
-;   192  -- 192K: two extra 64K pages confirmed
-;   256  -- 256K: three extra 64K pages confirmed
-;   320  -- 320K: four extra 64K pages confirmed
-;   384  -- 384K: five extra 64K pages confirmed
-;   448  -- 448K: six extra 64K pages confirmed
-;   512  -- 512K: seven extra 64K pages confirmed
-;
-; Test byte selection: the value #AA (#10101010) is used because it is a
-; checkerboard pattern unlikely to be a false positive left by other code,
-; and it catches wiring faults that affect only half the data lines.
-;
-; Important: this routine briefly maps extra RAM into slot 3 (#C000-#FFFF)
-; displacing the upper ROM / normal bank 3 for a few instructions. Interrupts
-; MUST be disabled before calling and re-enabled after if required.
-; The CRTC display start address should be pointing at #4000-#7FFF (slot 1)
-; or #8000-#BFFF (slot 2) during the test -- not #C000 -- to avoid visual glitches.
-;
-; Entry:
-;   none
-; Exit:
-;   HL = total RAM size in kilobytes (64, 128, 192, 256, 320, 384, 448, or 512)
-; Destroys: AF, BC, D, E, HL, IXL
-; Preserves: IXH, IY
-; Requirements: interrupts must be disabled (DI) before calling.
+        ld a,(#c000)
+        ld ixl,a      ; Store original Base byte in IXL
 
-; CPC_DetectRAM -- detect total RAM fitted (64K..512K) by probing extra GA RAM pages.
-; Entry: none  (interrupts must be disabled)
-; Exit:  HL = total RAM in kilobytes (64, 128, 192, 256, 320, 384, 448, or 512)
-; Destroys: AF, BC, DE, HL, IXL  Preserves: IXH, IY
-CPC_DetectRAM:
-    ; Start with 64K base -- we will add 64 for each confirmed extra page.
-    ; D = current page selector accumulator (bits 5-3, incremented by GA_RAM_PAGE_1=8 each step).
-    ; E = base GA RAM bank command byte (GA_CMD_RAM_BANK | GA_RAM_CFG_1).
-    ; HL = running total in kilobytes.
-    ld hl,64
-    ld d,0
-    ld e,GA_CMD_RAM_BANK+GA_RAM_CFG_1
-.page_loop:
-    ; Build the GA RAM bank command: base | current page offset.
-    ld a,e
-    or d
-    ; Switch extra RAM page into slot 3 (#C000-#FFFF) via B=#7F, C=command.
-    ld c,a
-    ld b,#7f
-    out (c),c
-    ; Save the current byte at #C000 in IX (safe, preserved across the test).
-    ld a,(#c000)
-    ld ixl,a
-    ; Write the test pattern #AA and immediately read it back.
-    ld (#c000),#aa
-    ld a,(#c000)
-    ; Restore the original byte before switching the bank back.
-    ld (#c000),ixl
-    ; Restore the normal RAM map (config 0 = default power-on layout, page irrelevant).
-    ld bc,GA_PORT_CMD+GA_CMD_RAM_BANK+GA_RAM_CFG_0
-    out (c),c
-    ; If the read-back did not match #AA, this page is absent -- stop counting.
-    cp #aa
-    jr nz,.done
-    ; This page is confirmed -- add 64K to the running total.
-    ld bc,64
-    add hl,bc
-    ; Advance to the next page (each page step = +GA_RAM_PAGE_1 = +8 in bits 5-3).
-    ld a,d
-    add a,GA_RAM_PAGE_1
-    ld d,a
-    ; Stop after page 7 (adding 8 to #38 wraps bits 5-3 back to 0).
-    cp GA_RAM_PAGE_0
-    jr nz,.page_loop
-.done:
-    ret
+        ld a,#50      ; Unique ID 0x50 for Base (ID 0)
+        ld (#c000),a
 
+        ; Phase 1: Save Extra RAM bytes (0..7) to stack and tag them sequentially
+        ld e,GA_CMD_RAM_BANK+GA_RAM_CFG_1
+        ld d,0
+    .save_loop:
+        ld a,d
+        add a,a
+        add a,a
+        add a,a       ; A = D * 8 (align to GA_RAM_PAGE mapping bits 5-3)
+        or e
+        ld b,#7f
+        ld c,a
+        out (c),c     ; Switch extra RAM page into slot 3 (#C000)
 
-ENDIF
+        ld a,(#c000)
+        push af       ; Save the original byte on the stack
+
+        ld a,d
+        add a,#51     ; Unique ID 0x51..0x58 for Pages 0..7
+        ld (#c000),a  ; Write unique ID
+
+        inc d
+        ld a,d
+        cp 8
+        jr nz,.save_loop
+
+        ; Phase 2: Read back and accumulate distinct matches
+        ld hl,0       ; HL = counted kilobyte accumulator
+
+        ; 2a: Check Base RAM
+        ld b,#7f
+        ld c,GA_CMD_RAM_BANK+GA_RAM_CFG_0
+        out (c),c
+        ld a,(#c000)
+        cp #50        ; Does Base still hold ID 0x50?
+        jr nz,.base_mismatch
+        ld bc,64
+        add hl,bc     ; Base RAM distinct match!
+    .base_mismatch:
+
+        ; 2b: Check Extra RAM Pages (0..7)
+        ld d,0
+        ld e,GA_CMD_RAM_BANK+GA_RAM_CFG_1
+    .check_loop:
+        ld a,d
+        add a,a
+        add a,a
+        add a,a
+        or e
+        ld b,#7f
+        ld c,a
+        out (c),c     ; Switch extra RAM page
+
+        ld a,d
+        add a,#51
+        ld c,a        ; C = Expected ID (save in C to avoid corrupting E)
+
+        ld a,(#c000)
+        cp c          ; Does it hold its explicitly expected ID?
+        jr nz,.extra_mismatch
+
+        ld bc,64
+        add hl,bc     ; Extra RAM page distinct match! Add 64K
+    .extra_mismatch:
+        inc d
+        ld a,d
+        cp 8
+        jr nz,.check_loop
+
+        ; Phase 3: Restore original bytes safely backwards
+        ld d,7
+        ld e,GA_CMD_RAM_BANK+GA_RAM_CFG_1
+    .restore_loop:
+        ld a,d
+        add a,a
+        add a,a
+        add a,a
+        or e
+        ld b,#7f
+        ld c,a
+        out (c),c
+
+        pop af        ; Recover original byte from stack
+        ld (#c000),a  ; Restore memory
+
+        dec d
+        jp p,.restore_loop ; Loop backwards until D goes below 0 (-1)
+
+        ; Restore Base RAM byte and standard CFG 0
+        ld b,#7f
+        ld c,GA_CMD_RAM_BANK+GA_RAM_CFG_0
+        out (c),c
+        ld a,ixl
+        ld (#c000),a
+
+        ret
+endif

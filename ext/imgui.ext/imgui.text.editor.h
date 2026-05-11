@@ -15,6 +15,7 @@
 #include <vector>
 #include <array>
 #include <memory>
+#include <deque>
 #include <unordered_set>
 #include <unordered_map>
 #include <map>
@@ -22,30 +23,183 @@
 
 namespace ImGui {
 
+	class TextEditorMI;
+	class ILanguageDefinition;
+	class ILanguageParser;
+	class TextEditor;
+
+	// -----------------------------------------------------------------------
+	// Named identifier entry used for known-identifier and preproc-identifier highlighting.
+	// Free type so ILanguageDefinition can hold an Identifiers map before TextEditor is defined.
+	// -----------------------------------------------------------------------
+	struct LangIdentifier {
+		int mDeclarationLine = 0;
+		int mDeclarationColumn = 0;
+		std::string mDeclaration;
+	};
+	using LangIdentifiers = std::unordered_map<std::string, LangIdentifier>;
+
+	// -----------------------------------------------------------------------
+	// Symbol kind — set by the language parser when registering a codelens symbol.
+	// -----------------------------------------------------------------------
+	enum class CodeLensSymbolKind {
+		Unknown,     // default — unclassified
+		Directive,   // assembler/compiler directive (ORG, ALIGN, REPEAT, MACRO, ...)
+		BuiltIn,     // language built-in (Log_Info, cos, API methods, ...)
+		UserDefined, // user-defined (function, macro definition, label, repeat block)
+	};
+
+	// -----------------------------------------------------------------------
+	// Global codelens symbol payload stored per file.
+	// -----------------------------------------------------------------------
+	struct CodeLensSymbolData {
+		std::string symbolName;
+		int lineNumber = -1;
+		std::string opcodes;
+		std::string timings;
+		std::string codelensText;
+		std::string externalCode;
+		CodeLensSymbolKind kind = CodeLensSymbolKind::Unknown;
+		bool referenceDisplay = false;
+	};
+
+	// -----------------------------------------------------------------------
+	// Global codelens file entry containing all symbols for that file.
+	// -----------------------------------------------------------------------
+	struct CodeLensFileData {
+		std::string filePath;
+		const ILanguageDefinition* language = nullptr;
+		std::vector<CodeLensSymbolData> symbols;
+		std::vector<std::pair<int, std::string>> errors;
+	};
+
+	// -----------------------------------------------------------------------
+	// A single entry in the global codelens parse queue.
+	// When lines is empty the file is read from disk when parsing begins.
+	// -----------------------------------------------------------------------
+	struct CodeLensParseTask {
+		std::string filePath;
+		const ILanguageDefinition* language = nullptr;
+		std::vector<std::string> lines;
+	};
+
+	// -----------------------------------------------------------------------
+	// An open block entry that was never closed during a parse job.
+	// Passed to ILanguageParser::ParseEnd so the language can emit errors.
+	// -----------------------------------------------------------------------
+	struct UnclosedBlock {
+		int trackerHandle;
+		int blockId;
+		int line;
+		int col;
+		std::string description;
+	};
+
+	// -----------------------------------------------------------------------
+	// Host machine interface — implemented by TextEditor.
+	// Language parsers call these methods to register symbols, report errors,
+	// and enqueue files. Concrete utility methods are non-virtual.
+	// -----------------------------------------------------------------------
+	class IMGUI_API TextEditorMI {
+	public:
+		virtual ~TextEditorMI() = default;
+		//
+		// Codelens symbol management — editor auto-creates file entries and auto-tags language.
+		// Implementations are provided by the concrete host (StaticCodeLensHost for parse jobs).
+		//
+		virtual void AddCodeLensSymbol(const std::string& filePath, const CodeLensSymbolData& symbol) {}
+		virtual void AddCodeLensSymbolIfNew(const std::string& filePath, const CodeLensSymbolData& symbol) {}
+		// symbolName may be "*" to delete all symbols in the file.
+		virtual void DeleteCodeLensSymbol(const std::string& filePath, const std::string& symbolName) {}
+		virtual void AddCodeLensError(const std::string& filePath, int lineNumber, const std::string& message) {}
+		virtual const std::vector<CodeLensFileData>& GetCodeLensFiles() const {
+			static const std::vector<CodeLensFileData> empty;
+			return empty;
+		}
+		// Parse queue — language triggers parsing of included/referenced files.
+		virtual void EnqueueCodeLensFile(const std::string& filePath, const ILanguageDefinition* language,
+		                                 const std::vector<std::string>& lines = {}, bool highPriority = false) {}
+		//
+		// Shared utility — word tokenizer. Stops at stopChar (0 = no stop).
+		// Returns sequences of [a-zA-Z0-9_] characters.
+		//
+		std::vector<std::string> TokenizeWords(const std::string& lineText, char stopChar = 0);
+		//
+		// Shared utility — leading comment extraction.
+		// Scans backward from targetLine in recentLines for contiguous comment lines starting with commentPrefix.
+		// Returns merged comment text with prefix stripped, or "" if none found.
+		//
+		std::string ExtractLeadingComment(const std::deque<std::pair<int, std::string>>& recentLines,
+		                                  int targetLine, const std::string& commentPrefix);
+		//
+		// Block tracker — allocates a tracker for a parse job. Returns a tracker handle.
+		// Multiple trackers may be allocated per job (one per nesting context).
+		//
+		int AllocateBlockTracker();
+		//
+		// Opens a block in the given tracker (e.g. a REPEAT at line/col). Returns a unique block ID.
+		//
+		int OpenBlock(int trackerHandle, int line, int col, const std::string& description = "");
+		//
+		// Closes the block with the given blockId in the given tracker.
+		//
+		void CloseBlock(int trackerHandle, int blockId);
+		//
+		// Clears all block trackers allocated during the current parse job.
+		//
+		void ClearBlockTrackers() { mBlockTrackers.clear(); }
+		//
+		// Collects all still-open block entries into a flat UnclosedBlock vector.
+		// Called by the parse host just before invoking ParseEnd.
+		//
+		std::vector<UnclosedBlock> CollectUnclosedBlocks() const;
+
+	protected:
+		// Block tracker state — valid only during an active parse job (cleared at start, collected at end).
+		struct BlockEntry {
+			int blockId;
+			int line;
+			int col;
+			std::string description;
+			bool closed = false;
+		};
+		struct BlockTracker {
+			std::vector<BlockEntry> entries;
+			int mNextBlockId = 0;
+		};
+		std::vector<BlockTracker> mBlockTrackers;
+	};
+
+	// -----------------------------------------------------------------------
+	// Open base class for language definitions.
+	// Concrete implementations fill the data fields and override CreateParser()
+	// when codelens parsing is needed.
+	// All TextEditor instances sharing the same ILanguageDefinition* share the
+	// same codelens symbol namespace.
+	// -----------------------------------------------------------------------
+	class IMGUI_API ILanguageDefinition {
+	public:
+		virtual ~ILanguageDefinition() = default;
+		virtual ILanguageParser* CreateParser(TextEditorMI* host) const { return nullptr; }
+
+		std::string mName;
+		std::unordered_set<std::string> mKeywords;
+		LangIdentifiers mIdentifiers;
+		LangIdentifiers mPreprocIdentifiers;
+		std::string mCommentStart, mCommentEnd, mSingleLineComment;
+		char mPreprocChar = '#';
+		bool mCaseSensitive = true;
+		bool mHasTimingSupport = false;
+		bool mHasBytecodeSupport = false;
+	};
+
 	//
 	// Multi-line source code editor widget with syntax highlighting, multi-cursor editing,
 	// undo/redo, and bracket matching. Renders as a scrollable ImGui child window.
 	// Based on: https://github.com/santaclose/ImGuiColorTextEdit
 	// Based on: https://github/pthom/ImGuiColorTextEdit
 	//
-	//
-	// This is a hard rewrite and modification over the original to
-	// -Bugfix for sdl inputs
-	// -Functions for search and replace
-	// -Removed boost dependency in general (each language can use internally what they want)
-	// -Added a codelens / symbol system
-	// -Added extra columns for bytecode and timmings
-	// -Added some intellisense over the codelens symbols
-	// -Fixed bugs regarding colors among others
-	// -Remove restrictions or hardcode values (like scrollbar sizes)
-	// -Added a new asm.z80 language
-	// -Added cursor style
-	// -Added right API to interact with the symbols under the cursor
-	// -Added document filename
-	// -Each language in a separate file (so we can change it to include only what is required)
-	//
-	//
-	class IMGUI_API TextEditor {
+	class IMGUI_API TextEditor : public TextEditorMI {
 	public:
 		// ------------- Exposed API ------------- //
 		//
@@ -58,18 +212,55 @@ namespace ImGui {
 		~TextEditor();
 
 		enum class PaletteId { Dark, Light, Mariana, RetroBlue };
-		enum class LanguageDefinitionId { None, Cpp, C, Cs, Python, Lua, Json, Sql, AngelScript, Glsl, Hlsl, Z80Asm };
 		enum class SetViewAtLineMode { FirstVisibleLine, Centered, LastVisibleLine };
 		enum class CursorStyle { Line, Block, Underline };
 		//
-		// Selects which timing value to display in the gutter and use in codelens computations.
-		// Applies to timing-aware languages (e.g. Z80).
+		// Re-expose free types as nested names for backward compatibility.
 		//
-		enum class TimingType {
-			Cycles,		 // Standard Z80 T-states
-			CyclesM1,	 // Z80 T-states including M1 wait states
-			Instructions // Amstrad CPC NOP-equivalent units
+		using CodeLensSymbolKind = ImGui::CodeLensSymbolKind;
+		using CodeLensSymbolData = ImGui::CodeLensSymbolData;
+		using CodeLensFileData = ImGui::CodeLensFileData;
+		using CodeLensParseTask = ImGui::CodeLensParseTask;
+		//
+		// Internal palette slot index (maps to entries in the Palette array).
+		// Language parsers use these values in SyntaxHighlight to report the color of each token.
+		//
+		enum class PaletteIndex {
+			Default,
+			Keyword,
+			Number,
+			String,
+			CharLiteral,
+			Punctuation,
+			Preprocessor,
+			Identifier,
+			KnownIdentifier,
+			PreprocIdentifier,
+			Comment,
+			MultiLineComment,
+			Background,
+			Cursor,
+			Selection,
+			ErrorMarker,
+			ControlCharacter,
+			Breakpoint,
+			LineNumber,
+			CurrentLineFill,
+			CurrentLineFillInactive,
+			CurrentLineEdge,
+			Operator,
+			Register,
+			Mnemonic,
+			Label,
+			Type,
+			Max
 		};
+		//
+		// Named identifier entry — re-exposed as TextEditor::Identifier for backward compatibility.
+		//
+		using Identifier = LangIdentifier;
+		using Identifiers = LangIdentifiers;
+
 		//
 		// When enabled, all editing is disabled; cursor movement and selection remain available.
 		//
@@ -115,24 +306,9 @@ namespace ImGui {
 		void SetCursorStyle(CursorStyle aValue);
 		CursorStyle GetCursorStyle() const;
 		//
-		// Sets the timing display mode; applies to timing-aware languages only (e.g. Z80).
-		// Invalidates the timing gutter cache and schedules a codelens refresh.
-		//
-		void SetTimingType(TimingType aValue);
-		TimingType GetTimingType() const;
-		//
-		// Returns true when the active language definition provides a timing callback.
-		// Use this to conditionally show timing-type configuration UI.
+		// Returns true when a query parser is active (language set with timing/bytecode support).
 		//
 		bool HasTimingSupport() const;
-		//
-		// Callback type for fetching timing string for a line (returns empty string if not available)
-		//
-		typedef std::string (*TimingCallback)(int lineNumber, const std::string& lineText, void* userData);
-		//
-		// Callback type for fetching bytecode string for a line (returns empty string if not available)
-		//
-		typedef std::string (*BytecodeCallback)(int lineNumber, const std::string& lineText, void* userData);
 		//
 		// Returns the total number of lines currently in the document.
 		//
@@ -144,10 +320,10 @@ namespace ImGui {
 		PaletteId GetPalette() const;
 		//
 		// Sets the language used for syntax highlighting and comment toggling.
-		// Pass LanguageDefinitionId::None to disable syntax highlighting entirely.
+		// Pass nullptr to disable syntax highlighting entirely.
 		//
-		void SetLanguageDefinition(LanguageDefinitionId aValue);
-		LanguageDefinitionId GetLanguageDefinition() const;
+		void SetLanguageDefinition(const ILanguageDefinition* aValue);
+		const ILanguageDefinition* GetLanguageDefinition() const;
 		//
 		// Returns the human-readable name of the active language definition, or "None".
 		//
@@ -311,35 +487,6 @@ namespace ImGui {
 			int line = -1;
 			std::string lineContent;
 		};
-		//
-		// Global codelens symbol payload stored per file.
-		//
-		struct CodeLensSymbolData {
-			std::string symbolName;
-			int lineNumber = -1;
-			std::string opcodes;
-			std::string timings;
-			std::string codelensText;
-			std::string externalCode;
-		};
-		//
-		// Global codelens file entry containing all symbols for that file.
-		//
-		struct CodeLensFileData {
-			std::string filePath;
-			LanguageDefinitionId language = LanguageDefinitionId::None;
-			std::vector<CodeLensSymbolData> symbols;
-			std::vector<std::pair<int, std::string>> errors;
-		};
-		//
-		// A single entry in the global codelens parse queue.
-		// When lines is empty the file is read from disk when parsing begins.
-		//
-		struct CodeLensParseTask {
-			std::string filePath;
-			LanguageDefinitionId language;
-			std::vector<std::string> lines;
-		};
 		typedef void (*FindAllResultsCallback)(const std::vector<FindAllResult>& results, const char* searchedText, void* userData);
 		//
 		// Sets the selection of cursor 0 from the given public SelectionPosition.
@@ -391,38 +538,64 @@ namespace ImGui {
 		//
 		static int AddCodeLensFile(const std::string& aFilePath);
 		//
-		// Sets the language on an existing codelens file entry (for synthetic entries not created via the parse pipeline).
+		// Returns the global codelens file list (static accessor for external callers).
 		//
-		static void SetCodeLensFileLanguage(const std::string& aFilePath, LanguageDefinitionId aLanguage);
+		static const std::vector<CodeLensFileData>& AllCodeLensFiles();
 		//
-		// Returns the global codelens file list.
+		// Returns the global codelens file list (virtual override for TextEditorMI).
 		//
-		static const std::vector<CodeLensFileData>& GetCodeLensFiles();
+		const std::vector<CodeLensFileData>& GetCodeLensFiles() const override;
 		//
 		// Adds or updates a codelens symbol entry for a file.
 		//
 		static int AddOrUpdateCodeLensSymbol(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData);
 		//
+		// Registers a codelens symbol and auto-tags the file entry with the active language.
+		// Used by StaticCodeLensHost — equivalent to AddCodeLensSymbol but accessible from outside TextEditor.
+		//
+		static void RegisterCodeLensSymbol(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData);
+		//
+		// Registers a codelens symbol only if absent, and auto-tags the file entry with the active language.
+		// Used by StaticCodeLensHost — equivalent to AddCodeLensSymbolIfNew but accessible from outside TextEditor.
+		//
+		static void RegisterCodeLensSymbolIfNew(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData);
+		//
+		// Virtual override — adds a codelens symbol, creating the file entry if needed.
+		//
+		void AddCodeLensSymbol(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData) override;
+		//
 		// Adds a codelens symbol only if no symbol with the same name already exists (any file).
 		// Used for function labels which must never overwrite a macro or definition.
 		//
-		static bool AddCodeLensSymbolIfNew(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData);
+		static bool sAddCodeLensSymbolIfNew(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData);
+		//
+		// Virtual override — adds a codelens symbol only if absent.
+		//
+		void AddCodeLensSymbolIfNew(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData) override;
 		//
 		// Deletes codelens symbols from a file by symbol name (trailing ':' is ignored).
 		//
-		static int DeleteCodeLensSymbol(const std::string& aFilePath, const std::string& aSymbolName);
+		static int sDeleteCodeLensSymbol(const std::string& aFilePath, const std::string& aSymbolName);
+		//
+		// Virtual override — deletes a codelens symbol.
+		//
+		void DeleteCodeLensSymbol(const std::string& aFilePath, const std::string& aSymbolName) override;
 		//
 		// Adds a codelens parse error for a file and line.
 		//
-		static int AddCodeLensError(const std::string& aFilePath, int aLineNumber, const std::string& aMessage);
+		static int sAddCodeLensError(const std::string& aFilePath, int aLineNumber, const std::string& aMessage);
+		//
+		// Virtual override — adds a codelens parse error.
+		//
+		void AddCodeLensError(const std::string& aFilePath, int aLineNumber, const std::string& aMessage) override;
 		//
 		// Parses an in-memory text buffer and populates codelens symbols for a file.
 		//
-		static bool ParseCodeLensFromText(const std::string& aFilePath, const std::string& aText, LanguageDefinitionId aLanguage);
+		static bool ParseCodeLensFromText(const std::string& aFilePath, const std::string& aText, const ILanguageDefinition* aLanguage);
 		//
 		// Loads a file from disk, parses its text and populates codelens symbols.
 		//
-		static bool ParseCodeLensFromFile(const std::string& aFilePath, LanguageDefinitionId aLanguage);
+		static bool ParseCodeLensFromFile(const std::string& aFilePath, const ILanguageDefinition* aLanguage);
 		//
 		// Enqueues a high-priority re-parse of the current in-memory document.
 		//
@@ -433,12 +606,17 @@ namespace ImGui {
 		//
 		void CancelCodeLensRefresh();
 		//
-		// Enqueues a file for background codelens parsing.
+		// Enqueues a file for background codelens parsing (static accessor for external callers).
 		// When aLines is non-empty the snapshot is used directly; otherwise the file is read from disk.
 		// aHighPriority=true inserts the task at the front of the queue (editor-edit path).
 		// Any existing queue entry for the file is replaced, and an active parse for it is cancelled.
 		//
-		static void EnqueueCodeLensFile(const std::string& aFilePath, LanguageDefinitionId aLanguage, const std::vector<std::string>& aLines = {}, bool aHighPriority = false);
+		static void EnqueueCodeLensFileStatic(const std::string& aFilePath, const ILanguageDefinition* aLanguage, const std::vector<std::string>& aLines = {}, bool aHighPriority = false);
+		//
+		// Virtual override — enqueues a file for background codelens parsing.
+		//
+		void EnqueueCodeLensFile(const std::string& aFilePath, const ILanguageDefinition* aLanguage,
+		                         const std::vector<std::string>& aLines = {}, bool aHighPriority = false) override;
 		//
 		// Processes up to aMaxLines lines from the global parse queue.
 		// Should be called once per frame from the application main loop, independent of any editor.
@@ -451,35 +629,6 @@ namespace ImGui {
 		static bool IsCodeLensParsingPending();
 
 	private:
-		// -----------------------------------------------------------------------
-		// Internal palette slot index (maps to entries in the Palette array)
-		// -----------------------------------------------------------------------
-		enum class PaletteIndex {
-			Default,
-			Keyword,
-			Number,
-			String,
-			CharLiteral,
-			Punctuation,
-			Preprocessor,
-			Identifier,
-			KnownIdentifier,
-			PreprocIdentifier,
-			Comment,
-			MultiLineComment,
-			Background,
-			Cursor,
-			Selection,
-			ErrorMarker,
-			ControlCharacter,
-			Breakpoint,
-			LineNumber,
-			CurrentLineFill,
-			CurrentLineFillInactive,
-			CurrentLineEdge,
-			Max
-		};
-
 		// -----------------------------------------------------------------------
 		// Character coordinate in screen space: (line index, visual column).
 		// Tabs expand to the next tab stop; column is visual, not a byte offset.
@@ -522,16 +671,7 @@ namespace ImGui {
 			void SortCursorsFromTopToBottom();
 		};
 
-		// -----------------------------------------------------------------------
-		// Named identifier entry used for known-identifier and preproc-identifier highlighting
-		// -----------------------------------------------------------------------
-		struct Identifier {
-			Coordinates mLocation;	  // Source location where the identifier was declared.
-			std::string mDeclaration; // Human-readable declaration string shown in tooltips.
-		};
-
-		typedef std::unordered_map<std::string, Identifier> Identifiers; // Lookup table: name -> Identifier entry.
-		typedef std::array<ImU32, (unsigned)PaletteIndex::Max> Palette;	 // Packed ABGR color array indexed by PaletteIndex.
+		typedef std::array<ImU32, (unsigned)PaletteIndex::Max> Palette; // Packed ABGR color array indexed by PaletteIndex.
 
 		// -----------------------------------------------------------------------
 		// A single rendered character cell carrying the character and its color index
@@ -546,47 +686,6 @@ namespace ImGui {
 		};
 
 		typedef std::vector<Glyph> Line;
-
-		// -----------------------------------------------------------------------
-		// Language syntax definition: keyword set, tokenizer callback, comment markers
-		// -----------------------------------------------------------------------
-		struct LanguageDefinition {
-			// Given the range [in_begin, in_end), writes the next recognized token to out_begin/out_end
-			// and sets paletteIndex; returns true when a token was found.
-			typedef bool (*TokenizeCallback)(const char* in_begin, const char* in_end, const char*& out_begin, const char*& out_end, PaletteIndex& paletteIndex);
-			typedef void (*CodeLensParseStartCallback)(const std::string& filePath, void* userData);
-			// Called once per source line during ParseCodeLensFromText.
-			typedef void (*CodeLensLineParserCallback)(int lineNumber, const std::string& filePath, const std::string& lineText);
-			typedef void (*CodeLensParseEndCallback)(const std::string& filePath);
-
-			std::string mName;											// Human-readable language name returned by GetLanguageDefinitionName().
-			std::unordered_set<std::string> mKeywords;					// Reserved keywords highlighted with PaletteIndex::Keyword.
-			Identifiers mIdentifiers;									// Known type/function names highlighted with KnownIdentifier.
-			Identifiers mPreprocIdentifiers;							// Preprocessor symbols highlighted with PreprocIdentifier.
-			std::string mCommentStart, mCommentEnd, mSingleLineComment; // Block comment delimiters and line comment prefix.
-			char mPreprocChar = '#';									// Character that begins a preprocessor directive.
-			TokenizeCallback mTokenize = nullptr;						// Optional custom tokenizer; falls back to identifier scan when null.
-			CodeLensParseStartCallback mCodeLensParseStart = nullptr;	// Optional codelens parser start hook called before line iteration.
-			CodeLensLineParserCallback mCodeLensLineParser = nullptr;	// Optional per-line codelens parser used by ParseCodeLensFromText.
-			CodeLensParseEndCallback mCodeLensParseEnd = nullptr;		// Optional codelens parser end hook called after line iteration.
-			bool mCaseSensitive = true;									// When false, keywords are matched case-insensitively.
-			TimingCallback mTimingCallback = nullptr;					// Optional callback for instruction timing information.
-			BytecodeCallback mBytecodeCallback = nullptr;				// Optional callback for instruction bytecode information.
-			mutable TimingType mTimingType = TimingType::Cycles;		// Active timing mode; mutable so it can be changed through the shared const singleton.
-
-			static const LanguageDefinition& Cpp();
-			static const LanguageDefinition& Hlsl();
-			static const LanguageDefinition& Glsl();
-			static const LanguageDefinition& Python();
-			static const LanguageDefinition& C();
-			static const LanguageDefinition& Sql();
-			static const LanguageDefinition& AngelScript();
-			static const LanguageDefinition& Lua();
-			static const LanguageDefinition& Cs();
-			static const LanguageDefinition& Json();
-			static const LanguageDefinition& Z80Asm();
-			static bool TokenizeZ80Asm(const char* in_begin, const char* in_end, const char*& out_begin, const char*& out_end, PaletteIndex& paletteIndex);
-		};
 
 		// -----------------------------------------------------------------------
 		// A single atomic text operation (add or delete) stored inside an UndoRecord
@@ -908,8 +1007,7 @@ namespace ImGui {
 		CursorStyle mCursorStyle = CursorStyle::Line;			  // Visual cursor style used when rendering focused cursors.
 		FindAllResultsCallback mFindAllResultsCallback = nullptr; // Optional callback invoked by Find All.
 		void* mFindAllResultsUserData = nullptr;				  // User data forwarded to mFindAllResultsCallback.
-		TimingCallback mTimingCallback = nullptr;				  // Callback to fetch timing string for a line.
-		BytecodeCallback mBytecodeCallback = nullptr;			  // Callback to fetch bytecode string for a line.
+		ILanguageParser* mQueryParser = nullptr;				  // Persistent query parser for timing, bytecode, and colorizer.
 		std::vector<std::string> mTimingTextCache;				  // Per-line cached timing text.
 		std::vector<unsigned char> mTimingTextCacheValid;		  // Per-line timing cache validity flags.
 		std::vector<std::string> mBytecodeTextCache;			  // Per-line cached bytecode text.
@@ -952,6 +1050,7 @@ namespace ImGui {
 		// mLineTopYCache[lineCount] = total document height. Rebuilt only when dirty.
 		//
 		std::vector<float> mLineTopYCache;
+		std::vector<std::string> mLineCodeLensTextCache; // Per-line codelens text resolved at cache build; empty = no codelens.
 		int mLineTopYCacheVersion = -1;       // sCodeLensDataVersion at last rebuild (-1 = never built).
 		int mLineTopYCacheLineCount = 0;      // mLines.size() at last rebuild.
 		float mLineTopYCacheCharAdvanceY = 0.0f; // mCharAdvance.y at last rebuild; invalidates on font-size change.
@@ -996,14 +1095,13 @@ namespace ImGui {
 		// -----------------------------------------------------------------------
 		// Colorization state
 		// -----------------------------------------------------------------------
-		int mColorRangeMin = 0;									 // Start of the pending dirty line range.
-		int mColorRangeMax = 0;									 // End of the pending dirty line range.
-		bool mCheckComments = true;								 // When true, rerun the full comment/preprocessor scan before tokenizing.
-		PaletteId mPaletteId;									 // Currently active palette identifier.
-		Palette mPalette;										 // Resolved ABGR color values for every PaletteIndex slot.
-		LanguageDefinitionId mLanguageDefinitionId;				 // Active language definition identifier.
-		const LanguageDefinition* mLanguageDefinition = nullptr; // Pointer to the active language definition, or nullptr for plain text.
-		std::string mDocumentPath;								 // Source path bound to this editor instance for codelens ownership.
+		int mColorRangeMin = 0;									  // Start of the pending dirty line range.
+		int mColorRangeMax = 0;									  // End of the pending dirty line range.
+		bool mCheckComments = true;								  // When true, rerun the full comment/preprocessor scan before tokenizing.
+		PaletteId mPaletteId;									  // Currently active palette identifier.
+		Palette mPalette;										  // Resolved ABGR color values for every PaletteIndex slot.
+		const ILanguageDefinition* mLanguageDefinition = nullptr; // Pointer to the active language definition, or nullptr for plain text.
+		std::string mDocumentPath;								  // Source path bound to this editor instance for codelens ownership.
 		// -----------------------------------------------------------------------
 		// Incremental codelens parse state (per-editor; actual parsing runs in the global queue)
 		// -----------------------------------------------------------------------
@@ -1043,11 +1141,11 @@ namespace ImGui {
 		//
 		void InvalidateLineMetadataCacheFromLine(int aLine);
 		//
-		// Returns cached timing text for a line, computing it on cache miss.
+		// Returns cached timing text for a line, computing it on cache miss via the query parser.
 		//
 		const std::string& GetCachedTimingText(int aLine);
 		//
-		// Returns cached bytecode text for a line, computing it on cache miss.
+		// Returns cached bytecode text for a line, computing it on cache miss via the query parser.
 		//
 		const std::string& GetCachedBytecodeText(int aLine);
 
@@ -1075,8 +1173,8 @@ namespace ImGui {
 		// -----------------------------------------------------------------------
 		static std::vector<CodeLensParseTask> sCodeLensParseQueue;
 		static std::string sCodeLensActiveFilePath;
-		static LanguageDefinitionId sCodeLensActiveLanguage;
-		static const LanguageDefinition* sCodeLensActiveLanguageDef;
+		static ILanguageParser* sCodeLensActiveParser;
+		static const ILanguageDefinition* sCodeLensActiveLanguageDef;
 		static std::vector<std::string> sCodeLensActiveLines;
 		static int sCodeLensActiveNextLine;
 		static bool sCodeLensActiveParseInProgress;
@@ -1088,14 +1186,56 @@ namespace ImGui {
 		//
 		static int sCodeLensDataVersion;
 		//
-		// Returns the language definition singleton for the given id, or nullptr for None.
-		//
-		static const LanguageDefinition* GetLanguageDefinitionForId(LanguageDefinitionId aId);
-		//
 		// Returns true when line aLine has a codelens annotation in the current codelens data.
 		// aCurrentFilePath must be the normalized document path (NormalizePath applied).
 		//
-		bool ComputeLineHasCodeLens(int aLine, const std::string& aCurrentFilePath) const;
+		std::string ComputeCodeLensTextForLine(int aLine, const std::string& aCurrentFilePath) const;
+		void ShiftCacheOnInsert(int aLineIndex);
+		void ShiftCacheOnDelete(int aLineIndex);
+		void ShiftCacheOnDeleteRange(int aStart, int aEnd);
+	};
+
+	// -----------------------------------------------------------------------
+	// Stateful per-parse-job language parser.
+	// Each parse job allocates a fresh instance via ILanguageDefinition::CreateParser(host).
+	// The persistent mQueryParser on TextEditor is a separate instance used only for on-demand queries.
+	// ParseStart/ParseLine/ParseEnd must NOT be called on the query parser.
+	// -----------------------------------------------------------------------
+	class IMGUI_API ILanguageParser {
+	public:
+		virtual ~ILanguageParser() = default;
+		//
+		// Called once before the first ParseLine of a parse job.
+		//
+		virtual void ParseStart(const std::string& filePath) = 0;
+		//
+		// Called once per line of the file being parsed.
+		//
+		virtual void ParseLine(int lineNumber, const std::string& filePath, const std::string& lineText) = 0;
+		//
+		// Called once after all lines have been parsed.
+		// unclosedBlocks contains all blocks opened via TextEditorMI::OpenBlock that were never closed.
+		// The language iterates over unclosedBlocks and calls mHost->AddCodeLensError(...) for each mismatch.
+		//
+		virtual void ParseEnd(const std::string& filePath, const std::vector<UnclosedBlock>& unclosedBlocks) = 0;
+		//
+		// Returns a timing string for the given line text. "" if the language has no timing support.
+		// May cache results internally. Called from the gutter renderer on the persistent query parser.
+		//
+		virtual std::string GetLineTiming(const std::string& lineText) const { return ""; }
+		//
+		// Returns a bytecode/opcode string for the given line text. "" if not supported.
+		// Called from the gutter renderer on the persistent query parser.
+		//
+		virtual std::string GetLineBytecode(const std::string& lineText) const { return ""; }
+		//
+		// Syntax highlighter for the incremental colorizer — replaces the old mTokenize function pointer.
+		// Given the range [inBegin, inEnd), writes the next recognized token to outBegin/outEnd,
+		// sets paletteIndex to the appropriate TextEditor::PaletteIndex value, returns true when a token was found.
+		//
+		virtual bool SyntaxHighlight(const char* inBegin, const char* inEnd,
+		                             const char*& outBegin, const char*& outEnd,
+		                             TextEditor::PaletteIndex& paletteIndex) const { return false; }
 	};
 
 } // namespace ImGui

@@ -18,7 +18,7 @@ DebugProcesses equ 1
 include 'macros.debug.asm'
 include 'macros.keyboard.asm'
 include 'cpc.palette.premixed.asm'
-include 'cpc.keyboard.asm'
+include 'cpc.keyboard.scan.asm'
 include 'sprites.asm'
 include 'cpc.interrupts.disable.asm'
 
@@ -54,7 +54,7 @@ MainLoop:
 	ld (PrevX),a
 	ld a,(SpriteY)
 	ld (PrevY),a
-  KEY_PRESSED KEY_O
+  KeyPressedM KEY_O
 	jr nc,.no_left
   GA_SetBorder GA_COLOR_BLUE
 	ld a,(SpriteX)
@@ -63,7 +63,7 @@ MainLoop:
 	dec a
 	ld (SpriteX),a
 .no_left:
-  KEY_PRESSED KEY_P
+  KeyPressedM KEY_P
 	jr nc,.no_right
   GA_SetBorder GA_COLOR_RED
 	ld a,(SpriteX)
@@ -75,7 +75,7 @@ MainLoop:
 	inc a
 	ld (SpriteX),a
 .no_right:
-  KEY_PRESSED KEY_Q
+ 	KeyPressedM KEY_Q
 	jr nc,.no_up
   GA_SetBorder GA_COLOR_GREEN
 	ld a,(SpriteY)
@@ -84,7 +84,7 @@ MainLoop:
 	dec a
 	ld (SpriteY),a
 .no_up:
-  KEY_PRESSED KEY_A
+ 	KeyPressedM KEY_A
 	jr nc,.no_down
   GA_SetBorder GA_COLOR_MAGENTA
 	ld a,(SpriteY)

@@ -1,16 +1,19 @@
-//----------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 //
+// Retrodev Gui
 //
+// AngelScript language definition and parser for TextEditor.
 //
+// (c) TLOTB 2026
 //
-//
-//----------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
-#include "../imgui.text.editor.h"
+#include <imgui.text.editor.h>
 #include <ctre.hpp>
-#include <string_view>
 #include <deque>
 #include <filesystem>
+#include <string_view>
+#include "lang.angelscript.h"
 
 namespace ImGui {
 	namespace TextEditorLangs {
@@ -27,9 +30,9 @@ namespace ImGui {
 			// AngelScript built-in math/utility functions
 			//
 			const char* const kAngelScriptIdentifiers[] = {"cos",		  "sin",		 "tab",			"acos",		  "asin",	  "atan",	 "atan2",	 "cosh",
-														   "sinh",		  "tanh",		 "log",			"log10",	  "pow",	  "sqrt",	 "abs",		 "ceil",
-														   "floor",		  "fraction",	 "closeTo",		"fpFromIEEE", "fpToIEEE", "complex", "opEquals", "opAddAssign",
-														   "opSubAssign", "opMulAssign", "opDivAssign", "opAdd",	  "opSub",	  "opMul",	 "opDiv"};
+															"sinh",		  "tanh",		 "log",			"log10",	  "pow",	  "sqrt",	 "abs",		 "ceil",
+															"floor",	  "fraction",	 "closeTo",		"fpFromIEEE", "fpToIEEE", "complex", "opEquals", "opAddAssign",
+															"opSubAssign", "opMulAssign", "opDivAssign", "opAdd",	  "opSub",	  "opMul",	 "opDiv"};
 			//
 			// Built-in API symbols injected as static codelens entries.
 			// Each entry is: { symbolName, signature, description }
@@ -283,65 +286,6 @@ namespace ImGui {
 				{"move", "int move(const string &in source, const string &in target)", "Moves or renames source to target. Returns 0 on success."},
 			};
 			//
-			// Codelens parse state — global within this translation unit
-			//
-			static std::string gCodeLensCurrentFilePath;
-			static std::deque<std::pair<int, std::string>> gCodeLensRecentLines;
-			//
-			// Injects all built-in API symbols as static codelens entries.
-			// They are registered under a synthetic file key so they persist across file changes.
-			// Re-injects whenever the synthetic file has been wiped (e.g. by ClearCodeLensData).
-			//
-			static void InjectApiSymbols() {
-				const auto& files = TextEditor::GetCodeLensFiles();
-				for (size_t i = 0; i < files.size(); i++)
-					if (files[i].filePath == "<angelscript-api>" && !files[i].symbols.empty())
-						return;
-				const std::string apiFile = "<angelscript-api>";
-				TextEditor::AddCodeLensFile(apiFile);
-				TextEditor::SetCodeLensFileLanguage(apiFile, TextEditor::LanguageDefinitionId::AngelScript);
-				auto addSym = [&](const ApiSymbolDef& def) {
-					TextEditor::CodeLensSymbolData sym;
-					sym.symbolName = def.name;
-					sym.lineNumber = -1;
-					sym.codelensText = "";
-					sym.externalCode = std::string(def.signature) + "\n\n" + def.description;
-					TextEditor::AddCodeLensSymbolIfNew(apiFile, sym);
-				};
-				for (size_t i = 0; i < sizeof(kApiGlobalFunctions) / sizeof(kApiGlobalFunctions[0]); i++)
-					addSym(kApiGlobalFunctions[i]);
-				for (size_t i = 0; i < sizeof(kApiImageMethods) / sizeof(kApiImageMethods[0]); i++)
-					addSym(kApiImageMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiPaletteMethods) / sizeof(kApiPaletteMethods[0]); i++)
-					addSym(kApiPaletteMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiBitmapContextMethods) / sizeof(kApiBitmapContextMethods[0]); i++)
-					addSym(kApiBitmapContextMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiTilesetContextMethods) / sizeof(kApiTilesetContextMethods[0]); i++)
-					addSym(kApiTilesetContextMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiSpriteContextMethods) / sizeof(kApiSpriteContextMethods[0]); i++)
-					addSym(kApiSpriteContextMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiMapContextMethods) / sizeof(kApiMapContextMethods[0]); i++)
-					addSym(kApiMapContextMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiRgbColorFields) / sizeof(kApiRgbColorFields[0]); i++)
-					addSym(kApiRgbColorFields[i]);
-				for (size_t i = 0; i < sizeof(kApiArrayMethods) / sizeof(kApiArrayMethods[0]); i++)
-					addSym(kApiArrayMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiDictionaryMethods) / sizeof(kApiDictionaryMethods[0]); i++)
-					addSym(kApiDictionaryMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiGridMethods) / sizeof(kApiGridMethods[0]); i++)
-					addSym(kApiGridMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiMathFunctions) / sizeof(kApiMathFunctions[0]); i++)
-					addSym(kApiMathFunctions[i]);
-				for (size_t i = 0; i < sizeof(kApiStringMethods) / sizeof(kApiStringMethods[0]); i++)
-					addSym(kApiStringMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiStringGlobalFunctions) / sizeof(kApiStringGlobalFunctions[0]); i++)
-					addSym(kApiStringGlobalFunctions[i]);
-				for (size_t i = 0; i < sizeof(kApiFileMethods) / sizeof(kApiFileMethods[0]); i++)
-					addSym(kApiFileMethods[i]);
-				for (size_t i = 0; i < sizeof(kApiFileSystemMethods) / sizeof(kApiFileSystemMethods[0]); i++)
-					addSym(kApiFileSystemMethods[i]);
-			}
-			//
 			// Resolve an #include path relative to the including file's directory.
 			//
 			static std::string ResolveIncludePath(const std::string& fromFile, const std::string& includePath) {
@@ -354,320 +298,361 @@ namespace ImGui {
 				return canonical.string();
 			}
 			//
-			// Scan backward through the recent-lines buffer for a contiguous // comment block
-			// ending on the line immediately before targetLine.
-			// Returns the merged comment text (// prefix stripped), or empty if none found.
+			// AngelScriptParser — per-parse-job stateful parser.
 			//
-			static std::string ExtractLeadingComment(int targetLine) {
-				int blockEnd = -1;
-				int blockStart = -1;
-				for (int i = (int)gCodeLensRecentLines.size() - 1; i >= 0; i--) {
-					const auto& entry = gCodeLensRecentLines[i];
-					if (entry.first >= targetLine)
-						continue;
-					if (blockEnd == -1) {
-						if (entry.first == targetLine - 1)
-							blockEnd = i;
-						else
-							break;
-					}
-					const std::string& text = entry.second;
+			class AngelScriptParser : public ILanguageParser {
+			public:
+				AngelScriptParser(TextEditorMI* host, const ILanguageDefinition* langDef)
+					: mHost(host), mLangDef(langDef) {}
+
+				void ParseStart(const std::string& filePath) override {
+					mCurrentFilePath = filePath;
+					mRecentLines.clear();
+					mBraceTracker = mHost->AllocateBlockTracker();
+					mBraceBlockIds.clear();
+					InjectApiSymbols();
+				}
+
+				void ParseLine(int lineNumber, const std::string& filePath, const std::string& lineText) override {
+					mRecentLines.push_back(std::make_pair(lineNumber, lineText));
+					if (mRecentLines.size() > 30)
+						mRecentLines.pop_front();
+					std::string_view sv(lineText);
+					//
+					// Skip leading whitespace
+					//
 					size_t p = 0;
-					while (p < text.size() && (text[p] == ' ' || text[p] == '\t'))
+					while (p < sv.size() && (sv[p] == ' ' || sv[p] == '\t'))
 						p++;
-					if (p + 1 < text.size() && text[p] == '/' && text[p + 1] == '/') {
-						blockStart = i;
-					} else {
-						break;
-					}
-				}
-				if (blockStart == -1 || blockEnd == -1)
-					return std::string();
-				std::string result;
-				for (int i = blockStart; i <= blockEnd; i++) {
-					const std::string& text = gCodeLensRecentLines[i].second;
-					size_t p = 0;
-					while (p < text.size() && (text[p] == ' ' || text[p] == '\t'))
-						p++;
-					if (p + 1 < text.size() && text[p] == '/' && text[p + 1] == '/') {
-						p += 2;
-						if (p < text.size() && text[p] == ' ')
-							p++;
-					}
-					if (!result.empty())
-						result += '\n';
-					result += text.substr(p);
-				}
-				return result;
-			}
-			//
-			// Codelens parse start hook for AngelScript.
-			//
-			static void ParseCodeLensStart(const std::string& filePath, void* /*userData*/) {
-				gCodeLensCurrentFilePath = filePath;
-				gCodeLensRecentLines.clear();
-				InjectApiSymbols();
-			}
-			//
-			// Per-line codelens parser for AngelScript.
-			// Handles:
-			//   #include "file.as"  — resolves path and enqueues included file for parsing
-			//   ReturnType FuncName(...)  — registers function symbol with leading doc comment
-			//
-			static void ParseCodeLensLine(int lineNumber, const std::string& filePath, const std::string& lineText) {
-				gCodeLensRecentLines.push_back(std::make_pair(lineNumber, lineText));
-				if (gCodeLensRecentLines.size() > 30)
-					gCodeLensRecentLines.pop_front();
-				std::string_view sv(lineText);
-				//
-				// Skip leading whitespace
-				//
-				size_t p = 0;
-				while (p < sv.size() && (sv[p] == ' ' || sv[p] == '\t'))
-					p++;
-				if (p >= sv.size())
-					return;
-				//
-				// Skip comment lines — they cannot start a symbol definition
-				//
-				if (p + 1 < sv.size() && sv[p] == '/' && sv[p + 1] == '/')
-					return;
-				//
-				// #include "path/to/file.as"
-				//
-				if (sv.substr(p, 8) == "#include") {
-					size_t q = p + 8;
-					while (q < sv.size() && (sv[q] == ' ' || sv[q] == '\t'))
-						q++;
-					if (q < sv.size() && sv[q] == '"') {
-						size_t start = q + 1;
-						size_t end = sv.find('"', start);
-						if (end != std::string_view::npos) {
-							std::string includeName(sv.substr(start, end - start));
-							std::string includePath = ResolveIncludePath(filePath, includeName);
-							TextEditor::EnqueueCodeLensFile(includePath, TextEditor::LanguageDefinitionId::AngelScript);
+					if (p >= sv.size())
+						return;
+					//
+					// Skip comment lines — they cannot start a symbol definition
+					//
+					if (p + 1 < sv.size() && sv[p] == '/' && sv[p + 1] == '/')
+						return;
+					//
+					// #include "path/to/file.as"
+					//
+					if (sv.substr(p, 8) == "#include") {
+						size_t q = p + 8;
+						while (q < sv.size() && (sv[q] == ' ' || sv[q] == '\t'))
+							q++;
+						if (q < sv.size() && sv[q] == '"') {
+							size_t start = q + 1;
+							size_t end = sv.find('"', start);
+							if (end != std::string_view::npos) {
+								std::string includeName(sv.substr(start, end - start));
+								std::string includePath = ResolveIncludePath(filePath, includeName);
+								mHost->EnqueueCodeLensFile(includePath, mLangDef);
+							}
 						}
+						return;
 					}
-					return;
-				}
-				//
-				// Function definition detection.
-				// Pattern: at least one word (return type) then FuncName(
-				// The CTRE search finds the last identifier immediately before '('.
-				//
-				std::string_view rest = sv.substr(p);
-				if (auto m = ctre::search<R"(\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\()">(rest)) {
 					//
-					// Skip flow-control keywords that cannot begin a declaration
+					// Function definition detection.
+					// Pattern: at least one word (return type) then FuncName(
+					// The CTRE search finds the last identifier immediately before '('.
 					//
-					static const char* kSkipKeywords[] = {"if",	   "else",	   "for",	  "while", "do",	 "switch", "case", "return",
-														  "break", "continue", "default", "new",   "delete", "null",   "true", "false"};
-					std::string funcName(m.get<1>().to_view());
-					bool skip = false;
-					for (size_t ki = 0; ki < sizeof(kSkipKeywords) / sizeof(kSkipKeywords[0]); ki++)
-						if (funcName == kSkipKeywords[ki]) {
-							skip = true;
-							break;
-						}
-					if (skip)
-						return;
-					//
-					// Require that something (the return type) precedes the function name
-					//
-					size_t matchOffset = (size_t)(m.get<0>().data() - rest.data());
-					if (matchOffset == 0)
-						return;
-					//
-					// Require a closing ')' or opening '{' on the same line, or an unclosed
-					// '(' with no ';' — the last case covers multi-line function signatures.
-					//
-					std::string_view afterName = rest.substr(matchOffset + funcName.size());
-					bool hasBrace = afterName.find('{') != std::string_view::npos;
-					bool hasCloseParen = afterName.find(')') != std::string_view::npos;
-					bool hasOpenParen = afterName.find('(') != std::string_view::npos || rest.substr(0, matchOffset + funcName.size()).find('(') != std::string_view::npos;
-					bool hasSemicolon = rest.find(';') != std::string_view::npos;
-					bool isMultiLineSig = hasOpenParen && !hasCloseParen && !hasSemicolon;
-					if (!hasCloseParen && !hasBrace && !isMultiLineSig)
-						return;
-					//
-					// Skip names already covered by the static API definitions — they are call
-					// sites, not user function definitions, and must not shadow the API docs.
-					//
-					const std::string apiFile = "<angelscript-api>";
-					const auto& codeLensFiles = TextEditor::GetCodeLensFiles();
-					bool isApiSymbol = false;
-					for (size_t fi = 0; fi < codeLensFiles.size() && !isApiSymbol; fi++) {
-						if (codeLensFiles[fi].filePath != apiFile)
-							continue;
-						for (size_t si = 0; si < codeLensFiles[fi].symbols.size(); si++)
-							if (codeLensFiles[fi].symbols[si].symbolName == funcName) {
-								isApiSymbol = true;
+					std::string_view rest = sv.substr(p);
+					if (auto m = ctre::search<R"(\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\()">(rest)) {
+						//
+						// Skip flow-control keywords that cannot begin a declaration
+						//
+						static const char* kSkipKeywords[] = {"if",	   "else",	   "for",	  "while", "do",	 "switch", "case", "return",
+															  "break", "continue", "default", "new",   "delete", "null",   "true", "false"};
+						std::string funcName(m.get<1>().to_view());
+						bool skip = false;
+						for (size_t ki = 0; ki < sizeof(kSkipKeywords) / sizeof(kSkipKeywords[0]); ki++)
+							if (funcName == kSkipKeywords[ki]) {
+								skip = true;
 								break;
 							}
+						if (skip)
+							return;
+						//
+						// Require that something (the return type) precedes the function name
+						//
+						ptrdiff_t matchOffset = m.get<0>().data() - rest.data();
+						if (matchOffset <= 0)
+							return;
+						//
+						// Require a closing ')' or opening '{' on the same line, or an unclosed
+						// '(' with no ';' — the last case covers multi-line function signatures.
+						//
+						std::string_view afterName = rest.substr(static_cast<size_t>(matchOffset) + funcName.size());
+						bool hasBrace = afterName.find('{') != std::string_view::npos;
+						bool hasCloseParen = afterName.find(')') != std::string_view::npos;
+						bool hasOpenParen = afterName.find('(') != std::string_view::npos || rest.substr(0, static_cast<size_t>(matchOffset) + funcName.size()).find('(') != std::string_view::npos;
+						bool hasSemicolon = rest.find(';') != std::string_view::npos;
+						bool isMultiLineSig = hasOpenParen && !hasCloseParen && !hasSemicolon;
+						if (!hasCloseParen && !hasBrace && !isMultiLineSig)
+							return;
+						//
+						// Skip names already covered by the static API definitions — they are call
+						// sites, not user function definitions, and must not shadow the API docs.
+						//
+						if (IsApiSymbol(funcName))
+							return;
+						//
+						// Build the symbol with any leading // doc comment as documentation
+						//
+						std::string comment = mHost->ExtractLeadingComment(mRecentLines, lineNumber, "//");
+						std::string externalCode = lineText;
+						if (!comment.empty())
+							externalCode = comment + "\n\n" + lineText;
+						TextEditor::CodeLensSymbolData sym;
+						sym.symbolName = funcName;
+						sym.lineNumber = lineNumber;
+						sym.codelensText = "";
+						sym.externalCode = externalCode;
+						sym.kind = TextEditor::CodeLensSymbolKind::UserDefined;
+						mHost->AddCodeLensSymbol(filePath, sym);
 					}
-					if (isApiSymbol)
-						return;
 					//
-					// Build the symbol with any leading // doc comment as documentation
+					// Brace tracking — scan for { and } while skipping strings and // comments.
+					// Pattern matches: // (stop), "..." (skip), { or } (track)
 					//
-					std::string comment = ExtractLeadingComment(lineNumber);
-					std::string externalCode = lineText;
-					if (!comment.empty())
-						externalCode = comment + "\n\n" + lineText;
-					TextEditor::CodeLensSymbolData sym;
-					sym.symbolName = funcName;
-					sym.lineNumber = lineNumber;
-					sym.codelensText = "";
-					sym.externalCode = externalCode;
-					TextEditor::AddOrUpdateCodeLensSymbol(filePath, sym);
+					{
+						std::string_view scanView(lineText);
+						while (!scanView.empty()) {
+							auto bm = ctre::search<R"(//|"(?:[^"\\]|\\.)*"|[{}])">(scanView);
+							if (!bm)
+								break;
+							std::string_view matched = bm.get<0>().to_view();
+							size_t offset = static_cast<size_t>(matched.data() - scanView.data());
+							char first = matched[0];
+							if (first == '/')
+								break;
+							if (first == '"') {
+								scanView = scanView.substr(offset + matched.size());
+								continue;
+							}
+							int col = static_cast<int>(matched.data() - lineText.data());
+							if (first == '{') {
+								int id = mHost->OpenBlock(mBraceTracker, lineNumber, col, "opening brace");
+								mBraceBlockIds.push_back(id);
+							} else {
+								if (!mBraceBlockIds.empty()) {
+									mHost->CloseBlock(mBraceTracker, mBraceBlockIds.back());
+									mBraceBlockIds.pop_back();
+								}
+							}
+							scanView = scanView.substr(offset + 1);
+						}
+					}
 				}
-			}
-			//
-			// Codelens parse end hook for AngelScript.
-			//
-			static void ParseCodeLensEnd(const std::string& /*filePath*/) {
-				gCodeLensRecentLines.clear();
-				gCodeLensCurrentFilePath.clear();
-			}
+
+				void ParseEnd(const std::string& filePath, const std::vector<UnclosedBlock>& unclosedBlocks) override {
+					for (size_t i = 0; i < unclosedBlocks.size(); i++)
+						mHost->AddCodeLensError(filePath, unclosedBlocks[i].line,
+							"Unmatched '{' at line " + std::to_string(unclosedBlocks[i].line));
+					mRecentLines.clear();
+					mCurrentFilePath.clear();
+					mBraceBlockIds.clear();
+				}
+
+				bool SyntaxHighlight(const char* inBegin, const char* inEnd, const char*& outBegin, const char*& outEnd,
+				                     TextEditor::PaletteIndex& paletteIndex) const override {
+					paletteIndex = TextEditor::PaletteIndex::Max;
+					while (inBegin < inEnd && isascii(*inBegin) && isblank(*inBegin))
+						inBegin++;
+					if (inBegin == inEnd) {
+						outBegin = inEnd;
+						outEnd = inEnd;
+						paletteIndex = TextEditor::PaletteIndex::Default;
+						return true;
+					}
+					std::string_view sv(inBegin, static_cast<size_t>(inEnd - inBegin));
+					//
+					// Triple-quoted multiline string  """..."""
+					//
+					if (auto m = ctre::starts_with<R"("""(?:[^"]|"(?!"")|""(?!"))*""")">(sv)) {
+						outBegin = inBegin;
+						outEnd = inBegin + m.size();
+						paletteIndex = TextEditor::PaletteIndex::String;
+						return true;
+					}
+					//
+					// Double-quoted string  "..."  with escape sequences
+					//
+					if (auto m = ctre::starts_with<R"("(?:[^"\\]|\\.)*")">(sv)) {
+						outBegin = inBegin;
+						outEnd = inBegin + m.size();
+						paletteIndex = TextEditor::PaletteIndex::String;
+						return true;
+					}
+					//
+					// Char literal  '.'  (single char or one escape sequence)
+					//
+					if (auto m = ctre::starts_with<R"('(?:\\.|[^'\\])')">(sv)) {
+						outBegin = inBegin;
+						outEnd = inBegin + m.size();
+						paletteIndex = TextEditor::PaletteIndex::CharLiteral;
+						return true;
+					}
+					//
+					// @handle reference  @identifier  -> Preprocessor colour
+					//
+					if (auto m = ctre::starts_with<R"(@[a-zA-Z_][a-zA-Z0-9_]*)">(sv)) {
+						outBegin = inBegin;
+						outEnd = inBegin + m.size();
+						paletteIndex = TextEditor::PaletteIndex::Preprocessor;
+						return true;
+					}
+					//
+					// Identifier  [a-zA-Z_][a-zA-Z0-9_]*
+					//
+					if (auto m = ctre::starts_with<R"([a-zA-Z_][a-zA-Z0-9_]*)">(sv)) {
+						outBegin = inBegin;
+						outEnd = inBegin + m.size();
+						paletteIndex = TextEditor::PaletteIndex::Identifier;
+						return true;
+					}
+					//
+					// Number: binary 0b, hex 0x, float with optional exponent, plain integer
+					//
+					if (auto m = ctre::starts_with<R"(0[bB][01]+|0[xX][0-9a-fA-F]+|[0-9]+([.][0-9]*)?([eE]([+]|\x2D)?[0-9]+)?f?)">(sv)) {
+						outBegin = inBegin;
+						outEnd = inBegin + m.size();
+						paletteIndex = TextEditor::PaletteIndex::Number;
+						return true;
+					}
+					//
+					// Punctuation: single-character operators and delimiters
+					//
+					switch (*inBegin) {
+						case '[':
+						case ']':
+						case '{':
+						case '}':
+						case '!':
+						case '%':
+						case '^':
+						case '&':
+						case '*':
+						case '(':
+						case ')':
+						case '-':
+						case '+':
+						case '=':
+						case '~':
+						case '|':
+						case '<':
+						case '>':
+						case '?':
+						case ':':
+						case '/':
+						case ';':
+						case ',':
+						case '.':
+						case '@':
+							outBegin = inBegin;
+							outEnd = inBegin + 1;
+							paletteIndex = TextEditor::PaletteIndex::Punctuation;
+							return true;
+					}
+					return false;
+				}
+
+			private:
+				TextEditorMI* mHost;
+				const ILanguageDefinition* mLangDef;
+				std::string mCurrentFilePath;
+				std::deque<std::pair<int, std::string>> mRecentLines;
+				int mBraceTracker = -1;
+				std::vector<int> mBraceBlockIds;
+
+				bool HasApiSymbolsInjected() const {
+					const auto& files = mHost->GetCodeLensFiles();
+					for (size_t fi = 0; fi < files.size(); fi++)
+						if (files[fi].filePath == "<angelscript-api>" && !files[fi].symbols.empty())
+							return true;
+					return false;
+				}
+
+				bool IsApiSymbol(const std::string& name) const {
+					const auto& files = mHost->GetCodeLensFiles();
+					for (size_t fi = 0; fi < files.size(); fi++) {
+						if (files[fi].filePath != "<angelscript-api>")
+							continue;
+						for (size_t si = 0; si < files[fi].symbols.size(); si++)
+							if (files[fi].symbols[si].symbolName == name)
+								return true;
+					}
+					return false;
+				}
+
+				void InjectApiSymbols() {
+					if (HasApiSymbolsInjected())
+						return;
+					const std::string apiFile = "<angelscript-api>";
+					auto addSym = [&](const ApiSymbolDef& def) {
+						TextEditor::CodeLensSymbolData sym;
+						sym.symbolName = def.name;
+						sym.lineNumber = -1;
+						sym.codelensText = "";
+						sym.externalCode = std::string(def.signature) + "\n\n" + def.description;
+						sym.kind = TextEditor::CodeLensSymbolKind::BuiltIn;
+						mHost->AddCodeLensSymbolIfNew(apiFile, sym);
+					};
+					for (size_t i = 0; i < sizeof(kApiGlobalFunctions) / sizeof(kApiGlobalFunctions[0]); i++)
+						addSym(kApiGlobalFunctions[i]);
+					for (size_t i = 0; i < sizeof(kApiImageMethods) / sizeof(kApiImageMethods[0]); i++)
+						addSym(kApiImageMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiPaletteMethods) / sizeof(kApiPaletteMethods[0]); i++)
+						addSym(kApiPaletteMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiBitmapContextMethods) / sizeof(kApiBitmapContextMethods[0]); i++)
+						addSym(kApiBitmapContextMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiTilesetContextMethods) / sizeof(kApiTilesetContextMethods[0]); i++)
+						addSym(kApiTilesetContextMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiSpriteContextMethods) / sizeof(kApiSpriteContextMethods[0]); i++)
+						addSym(kApiSpriteContextMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiMapContextMethods) / sizeof(kApiMapContextMethods[0]); i++)
+						addSym(kApiMapContextMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiRgbColorFields) / sizeof(kApiRgbColorFields[0]); i++)
+						addSym(kApiRgbColorFields[i]);
+					for (size_t i = 0; i < sizeof(kApiArrayMethods) / sizeof(kApiArrayMethods[0]); i++)
+						addSym(kApiArrayMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiDictionaryMethods) / sizeof(kApiDictionaryMethods[0]); i++)
+						addSym(kApiDictionaryMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiGridMethods) / sizeof(kApiGridMethods[0]); i++)
+						addSym(kApiGridMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiMathFunctions) / sizeof(kApiMathFunctions[0]); i++)
+						addSym(kApiMathFunctions[i]);
+					for (size_t i = 0; i < sizeof(kApiStringMethods) / sizeof(kApiStringMethods[0]); i++)
+						addSym(kApiStringMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiStringGlobalFunctions) / sizeof(kApiStringGlobalFunctions[0]); i++)
+						addSym(kApiStringGlobalFunctions[i]);
+					for (size_t i = 0; i < sizeof(kApiFileMethods) / sizeof(kApiFileMethods[0]); i++)
+						addSym(kApiFileMethods[i]);
+					for (size_t i = 0; i < sizeof(kApiFileSystemMethods) / sizeof(kApiFileSystemMethods[0]); i++)
+						addSym(kApiFileSystemMethods[i]);
+				}
+			};
 		}
 	}
+}
 
-	const TextEditor::LanguageDefinition& TextEditor::LanguageDefinition::AngelScript() {
-		static bool inited = false;
-		static LanguageDefinition langDef;
-		if (!inited) {
-			// Populate keywords
-			for (auto& k : TextEditorLangs::AngelScript::kAngelScriptKeywords)
-				langDef.mKeywords.insert(k);
-			// Populate known identifiers
-			for (auto& k : TextEditorLangs::AngelScript::kAngelScriptIdentifiers) {
-				Identifier id;
-				id.mDeclaration = "Built-in function";
-				langDef.mIdentifiers.insert(std::make_pair(std::string(k), id));
-			}
-			langDef.mCommentStart = "/*";
-			langDef.mCommentEnd = "*/";
-			langDef.mSingleLineComment = "//";
-			langDef.mCaseSensitive = true;
-			langDef.mName = "AngelScript";
-			//
-			// Tokenizer: uses CTRE compile-time patterns — all resolved to flat automata at compile time.
-			// Order of checks:
-			//   1. Triple-quoted string  """..."""  (AS multiline string)
-			//   2. Double-quoted string  "..."      (with escape sequences)
-			//   3. Char literal          '.'
-			//   4. @handle reference     @identifier  -> Preprocessor colour
-			//   5. Identifier / keyword
-			//   6. Number: binary 0b, hex 0x, float, integer
-			//   7. Punctuation
-			//
-			langDef.mTokenize = [](const char* in_begin, const char* in_end, const char*& out_begin, const char*& out_end, PaletteIndex& paletteIndex) -> bool {
-				paletteIndex = PaletteIndex::Max;
-				while (in_begin < in_end && isascii(*in_begin) && isblank(*in_begin))
-					in_begin++;
-				if (in_begin == in_end) {
-					out_begin = in_end;
-					out_end = in_end;
-					paletteIndex = PaletteIndex::Default;
-					return true;
-				}
-				std::string_view sv(in_begin, static_cast<size_t>(in_end - in_begin));
-				//
-				// Triple-quoted multiline string  """..."""
-				//
-				if (auto m = ctre::starts_with<R"("""(?:[^"]|"(?!"")|""(?!"))*""")">(sv)) {
-					out_begin = in_begin;
-					out_end = in_begin + m.size();
-					paletteIndex = PaletteIndex::String;
-					return true;
-				}
-				//
-				// Double-quoted string  "..."  with escape sequences
-				//
-				if (auto m = ctre::starts_with<R"("(?:[^"\\]|\\.)*")">(sv)) {
-					out_begin = in_begin;
-					out_end = in_begin + m.size();
-					paletteIndex = PaletteIndex::String;
-					return true;
-				}
-				//
-				// Char literal  '.'  (single char or one escape sequence)
-				//
-				if (auto m = ctre::starts_with<R"('(?:\\.|[^'\\])')">(sv)) {
-					out_begin = in_begin;
-					out_end = in_begin + m.size();
-					paletteIndex = PaletteIndex::CharLiteral;
-					return true;
-				}
-				//
-				// @handle reference  @identifier  -> Preprocessor colour
-				//
-				if (auto m = ctre::starts_with<R"(@[a-zA-Z_][a-zA-Z0-9_]*)">(sv)) {
-					out_begin = in_begin;
-					out_end = in_begin + m.size();
-					paletteIndex = PaletteIndex::Preprocessor;
-					return true;
-				}
-				//
-				// Identifier  [a-zA-Z_][a-zA-Z0-9_]*
-				//
-				if (auto m = ctre::starts_with<R"([a-zA-Z_][a-zA-Z0-9_]*)">(sv)) {
-					out_begin = in_begin;
-					out_end = in_begin + m.size();
-					paletteIndex = PaletteIndex::Identifier;
-					return true;
-				}
-				//
-				// Number: binary 0b, hex 0x, float with optional exponent, plain integer
-				//
-				if (auto m = ctre::starts_with<R"(0[bB][01]+|0[xX][0-9a-fA-F]+|[0-9]+([.][0-9]*)?([eE]([+]|\x2D)?[0-9]+)?f?)">(sv)) {
-					out_begin = in_begin;
-					out_end = in_begin + m.size();
-					paletteIndex = PaletteIndex::Number;
-					return true;
-				}
-				//
-				// Punctuation: single-character operators and delimiters
-				//
-				switch (*in_begin) {
-					case '[':
-					case ']':
-					case '{':
-					case '}':
-					case '!':
-					case '%':
-					case '^':
-					case '&':
-					case '*':
-					case '(':
-					case ')':
-					case '-':
-					case '+':
-					case '=':
-					case '~':
-					case '|':
-					case '<':
-					case '>':
-					case '?':
-					case ':':
-					case '/':
-					case ';':
-					case ',':
-					case '.':
-					case '@':
-						out_begin = in_begin;
-						out_end = in_begin + 1;
-						paletteIndex = PaletteIndex::Punctuation;
-						return true;
-				}
-				return false;
-			};
-			langDef.mCodeLensParseStart = TextEditorLangs::AngelScript::ParseCodeLensStart;
-			langDef.mCodeLensLineParser = TextEditorLangs::AngelScript::ParseCodeLensLine;
-			langDef.mCodeLensParseEnd = TextEditorLangs::AngelScript::ParseCodeLensEnd;
-			inited = true;
+namespace RetrodevGui {
+
+	AngelScriptLanguage::AngelScriptLanguage() {
+		for (auto& k : ImGui::TextEditorLangs::AngelScript::kAngelScriptKeywords)
+			mKeywords.insert(k);
+		for (auto& k : ImGui::TextEditorLangs::AngelScript::kAngelScriptIdentifiers) {
+			ImGui::LangIdentifier id;
+			id.mDeclaration = "Built-in function";
+			mIdentifiers.insert(std::make_pair(std::string(k), id));
 		}
-		return langDef;
+		mCommentStart = "/*";
+		mCommentEnd = "*/";
+		mSingleLineComment = "//";
+		mCaseSensitive = true;
+		mName = "AngelScript";
+	}
+
+	ImGui::ILanguageParser* AngelScriptLanguage::CreateParser(ImGui::TextEditorMI* host) const {
+		return new ImGui::TextEditorLangs::AngelScript::AngelScriptParser(host, this);
 	}
 
 }

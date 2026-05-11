@@ -11,6 +11,8 @@
 #pragma once
 
 #include <retrodev.gui.h>
+#include <filesystem>
+#include <string>
 
 namespace RetrodevGui {
 
@@ -43,9 +45,25 @@ namespace RetrodevGui {
 		//
 		static inline bool m_quitPending = false;
 		//
+		// Async build state.
+		// m_buildRunning: true while a background build thread is active.
+		// m_debugAfterBuild: launch the emulator when the build succeeds.
+		// m_buildItemName: name of the item being built (for emulator launch).
+		// m_prevCwd: working directory to restore when the build finishes.
+		//
+		static inline bool m_buildRunning = false;
+		static inline bool m_debugAfterBuild = false;
+		static inline std::string m_buildItemName;
+		static inline std::filesystem::path m_prevCwd;
+		//
 		// Renders the build toolbar (combo + Build + Debug buttons) inside the menu bar
 		//
 		static void PerformBuildToolbar();
+		//
+		// Start an async build for buildItemName.
+		// debugAfter: launch the emulator if the build succeeds.
+		//
+		static void StartBuild(const std::string& buildItemName, bool debugAfter);
 	};
 
 }

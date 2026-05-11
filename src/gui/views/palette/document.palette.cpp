@@ -308,7 +308,29 @@ namespace RetrodevGui {
 						continue;
 				}
 				if (p.buildItemName.empty())
-					continue;
+						continue;
+					//
+					// Check whether the referenced build item still exists in the project
+					//
+					bool thumbMissing = false;
+					{
+						RetrodevLib::GFXParams* existCheck = nullptr;
+						if (p.buildItemType == "Bitmap")
+							RetrodevLib::Project::BitmapGetCfg(p.buildItemName, &existCheck);
+						else if (p.buildItemType == "Tilemap")
+							RetrodevLib::Project::TilesetGetCfg(p.buildItemName, &existCheck);
+						else if (p.buildItemType == "Sprite")
+							RetrodevLib::Project::SpriteGetCfg(p.buildItemName, &existCheck);
+						thumbMissing = (existCheck == nullptr);
+					}
+					if (thumbMissing) {
+						ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.55f, 0.1f, 1.0f));
+						ImGui::TextUnformatted((std::string(ICON_ALERT_CIRCLE_OUTLINE) + "  " + p.buildItemName + " -- MISSING").c_str());
+						ImGui::PopStyleColor();
+						if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+							ImGui::SetTooltip("Build item '%s' no longer exists in the project.", p.buildItemName.c_str());
+						continue;
+					}
 				std::string key = zone.name + ":" + p.buildItemType + ":" + p.buildItemName + ":" + std::to_string(pi);
 				//
 				// Find the converter for this participant from the solution.
@@ -420,29 +442,39 @@ namespace RetrodevGui {
 				ImVec2 selectableSize = ImVec2(panelW, itemBotRight.y - itemTopLeft.y);
 				ImGui::SetCursorScreenPos(itemTopLeft);
 				if (ImGui::InvisibleButton(("##sel_" + key).c_str(), selectableSize)) {
-					m_selectedPreviewKey = key;
-					//
-					// Auto-select the solution entry that contains this participant.
-					// Walk all zone/tag solutions to find where pi appears, then
-					// update m_selectedSolutionZone and m_selectedSolutionTag so the
-					// right panel immediately shows the correct solved palette.
-					//
-					if (m_hasSolution) {
-						bool found = false;
-						for (int szi = 0; szi < (int)m_solution.zones.size() && !found; szi++) {
-							const RetrodevLib::PaletteZoneSolution& szs = m_solution.zones[szi];
+						m_selectedPreviewKey = key;
+						//
+						// Auto-select the solution entry that contains this participant.
+						// Only search within m_selectedZone -- pi is an index into that zone's
+						// participant array, so the same index may exist in other zones and must
+						// not be matched there.
+						//
+						if (m_hasSolution && m_selectedZone < (int)m_solution.zones.size()) {
+							const RetrodevLib::PaletteZoneSolution& szs = m_solution.zones[m_selectedZone];
+							bool found = false;
 							for (int sti = 0; sti < (int)szs.tagSolutions.size() && !found; sti++) {
 								const RetrodevLib::PaletteTagSolution& sts = szs.tagSolutions[sti];
 								if (sts.converters.find(pi) != sts.converters.end()) {
-									m_selectedSolutionZone = szi;
+									m_selectedSolutionZone = m_selectedZone;
 									m_selectedSolutionTag = sti;
 									m_preloadedSelected = false;
 									found = true;
 								}
 							}
+							//
+							// Always participants live only in the base solution (tagSolutions[0]).
+							// If not found in direct converters, check the base solution as fallback.
+							//
+							if (!found && !szs.tagSolutions.empty()) {
+								const RetrodevLib::PaletteTagSolution& base = szs.tagSolutions[0];
+								if (base.converters.find(pi) != base.converters.end()) {
+									m_selectedSolutionZone = m_selectedZone;
+									m_selectedSolutionTag = 0;
+									m_preloadedSelected = false;
+								}
+							}
 						}
 					}
-				}
 				//
 				// Highlight border for the selected thumbnail
 				//
@@ -723,22 +755,46 @@ namespace RetrodevGui {
 					RetrodevLib::PaletteParticipant& p = zone.participants[pi];
 					bool sel = (pi == m_selectedParticipant);
 					ImGui::PushID(pi);
-					//
-					// Selectable row label: type-specific icon + type + name + role
-					//
-					const char* roleLabel = kRoles[(int)p.role];
-					const char* typeIcon = ICON_IMAGE_MULTIPLE;
-					if (p.buildItemType == "Tilemap")
-						typeIcon = ICON_VIEW_GRID;
-					else if (p.buildItemType == "Sprite")
-						typeIcon = ICON_HUMAN_MALE;
-					else
-						typeIcon = ICON_FILE_IMAGE;
-					std::string roleTag = (p.role == RetrodevLib::PaletteParticipantRole::Level && !p.tag.empty()) ? (std::string(roleLabel) + " : " + p.tag) : roleLabel;
-					std::string rowLabel = std::string(typeIcon) + "  [" + (p.buildItemType.empty() ? "?" : p.buildItemType) + "]  " +
-										   (p.buildItemName.empty() ? "(none)" : p.buildItemName) + "  [" + roleTag + "]";
-					if (ImGui::Selectable(rowLabel.c_str(), sel, ImGuiSelectableFlags_SpanAllColumns))
-						m_selectedParticipant = pi;
+						//
+						// Check whether the referenced build item still exists in the project
+						//
+						bool isMissing = false;
+						if (!p.buildItemName.empty()) {
+							RetrodevLib::GFXParams* existCheck = nullptr;
+							if (p.buildItemType == "Bitmap")
+								RetrodevLib::Project::BitmapGetCfg(p.buildItemName, &existCheck);
+							else if (p.buildItemType == "Tilemap")
+								RetrodevLib::Project::TilesetGetCfg(p.buildItemName, &existCheck);
+							else if (p.buildItemType == "Sprite")
+								RetrodevLib::Project::SpriteGetCfg(p.buildItemName, &existCheck);
+							isMissing = (existCheck == nullptr);
+						}
+						//
+						// Selectable row label: type-specific icon + type + name + role
+						//
+						const char* roleLabel = kRoles[(int)p.role];
+						const char* typeIcon = ICON_IMAGE_MULTIPLE;
+						if (isMissing)
+							typeIcon = ICON_ALERT_CIRCLE_OUTLINE;
+						else if (p.buildItemType == "Tilemap")
+							typeIcon = ICON_VIEW_GRID;
+						else if (p.buildItemType == "Sprite")
+							typeIcon = ICON_HUMAN_MALE;
+						else
+							typeIcon = ICON_FILE_IMAGE;
+						std::string roleTag = (p.role == RetrodevLib::PaletteParticipantRole::Level && !p.tag.empty()) ? (std::string(roleLabel) + " : " + p.tag) : roleLabel;
+						std::string rowLabel = std::string(typeIcon) + "  [" + (p.buildItemType.empty() ? "?" : p.buildItemType) + "]  " +
+											   (p.buildItemName.empty() ? "(none)" : p.buildItemName) + "  [" + roleTag + "]";
+						if (isMissing)
+							rowLabel += "  " ICON_ALERT "  MISSING";
+						if (isMissing)
+							ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.55f, 0.1f, 1.0f));
+						if (ImGui::Selectable(rowLabel.c_str(), sel, ImGuiSelectableFlags_SpanAllColumns))
+							m_selectedParticipant = pi;
+						if (isMissing)
+							ImGui::PopStyleColor();
+						if (isMissing && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+							ImGui::SetTooltip("Build item '%s' no longer exists in the project.\nRemove or reassign this participant.", p.buildItemName.c_str());
 					//
 					// Context menu: remove participant
 					//

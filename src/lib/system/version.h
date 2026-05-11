@@ -18,8 +18,8 @@ namespace RetrodevLib {
 	// Build is replaced by the release build script; the token below is
 	// the placeholder that gets restored after each release build.
 	//
-	static constexpr int k_versionMajor = 0;
-	static constexpr int k_versionMinor = 9;
+	static constexpr int k_versionMajor = 1;
+	static constexpr int k_versionMinor = 0;
 	static constexpr const char* k_versionBuild = "@BUILD@"
 												  "BETA";
 	//

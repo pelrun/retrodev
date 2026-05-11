@@ -9,6 +9,7 @@
 // --------------------------------------------------------------------------------------------------------------
 
 #include "app.console.h"
+#include "app.h"
 #include <views/text/document.text.h>
 #include <cstdarg>
 #include <filesystem>
@@ -131,7 +132,10 @@ namespace RetrodevGui {
 		const float tabBarHeight = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y + ImGui::GetStyle().TabBarBorderSize;
 		const float childHeight = ImGui::GetContentRegionAvail().y - tabBarHeight;
 		// Scrollable log display area with horizontal overflow support
+		ImFont* consoleFont = Application::EditorFont != nullptr ? Application::EditorFont : ImGui::GetFont();
+		consoleFont->Scale = 0.85f;
 		if (ImGui::BeginChild("LogScrollArea", ImVec2(0, childHeight), false, ImGuiWindowFlags_HorizontalScrollbar)) {
+			ImGui::PushFont(consoleFont);
 			// Render log entries at or above the selected filter level
 			for (const auto& entry : m_channels[static_cast<int>(channel)]) {
 				if (static_cast<int>(entry.level) < static_cast<int>(m_filterLevel))
@@ -145,6 +149,8 @@ namespace RetrodevGui {
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					NavigateToLogEntry(entry.message);
 			}
+			ImGui::PopFont();
+			consoleFont->Scale = 1.0f;
 			// Auto-scroll to bottom when new messages arrive
 			if (m_autoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
 				ImGui::SetScrollHereY(1.0f);

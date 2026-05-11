@@ -156,10 +156,11 @@ namespace ImGui {
 	TextEditor::TextEditor() {
 		SetPalette(defaultPalette);
 		mLines.push_back(Line());
-		SetLanguageDefinition(LanguageDefinitionId::Cpp);
 	}
 
-	TextEditor::~TextEditor() {}
+	TextEditor::~TextEditor() {
+		delete mQueryParser;
+	}
 
 	// --------------------------------------- //
 	// ----------- Simple accessors ---------- //
@@ -218,22 +219,8 @@ namespace ImGui {
 	TextEditor::CursorStyle TextEditor::GetCursorStyle() const {
 		return mCursorStyle;
 	}
-	void TextEditor::SetTimingType(TimingType aValue) {
-		if (mLanguageDefinition == nullptr)
-			return;
-		mLanguageDefinition->mTimingType = aValue;
-		if (mTimingCallback == nullptr)
-			return;
-		InvalidateLineMetadataCacheFromLine(0);
-		ScheduleCodeLensRefresh();
-	}
-	TextEditor::TimingType TextEditor::GetTimingType() const {
-		if (mLanguageDefinition == nullptr)
-			return TimingType::Cycles;
-		return mLanguageDefinition->mTimingType;
-	}
 	bool TextEditor::HasTimingSupport() const {
-		return mTimingCallback != nullptr;
+		return mQueryParser != nullptr && mLanguageDefinition != nullptr && mLanguageDefinition->mHasTimingSupport;
 	}
 	void TextEditor::SetFindAllResultsCallback(FindAllResultsCallback aValue, void* aUserData) {
 		mFindAllResultsCallback = aValue;
@@ -245,8 +232,8 @@ namespace ImGui {
 	TextEditor::PaletteId TextEditor::GetPalette() const {
 		return mPaletteId;
 	}
-	TextEditor::LanguageDefinitionId TextEditor::GetLanguageDefinition() const {
-		return mLanguageDefinitionId;
+	const ILanguageDefinition* TextEditor::GetLanguageDefinition() const {
+		return mLanguageDefinition;
 	}
 	void TextEditor::SetDocumentPath(const std::string& aValue) {
 		mDocumentPath = aValue;
@@ -316,7 +303,7 @@ namespace ImGui {
 	}
 	const std::string& TextEditor::GetCachedTimingText(int aLine) {
 		static const std::string empty;
-		if (mTimingCallback == nullptr || aLine < 0 || aLine >= (int)mLines.size())
+		if (mQueryParser == nullptr || aLine < 0 || aLine >= (int)mLines.size())
 			return empty;
 		EnsureLineMetadataCacheSize();
 		if (!mTimingTextCacheValid[aLine]) {
@@ -324,14 +311,14 @@ namespace ImGui {
 			lineText.reserve(mLines[aLine].size());
 			for (const auto& glyph : mLines[aLine])
 				lineText += glyph.mChar;
-			mTimingTextCache[aLine] = mTimingCallback(aLine, lineText, (void*)&mLanguageDefinition->mTimingType);
+			mTimingTextCache[aLine] = mQueryParser->GetLineTiming(lineText);
 			mTimingTextCacheValid[aLine] = 1;
 		}
 		return mTimingTextCache[aLine];
 	}
 	const std::string& TextEditor::GetCachedBytecodeText(int aLine) {
 		static const std::string empty;
-		if (mBytecodeCallback == nullptr || aLine < 0 || aLine >= (int)mLines.size())
+		if (mQueryParser == nullptr || aLine < 0 || aLine >= (int)mLines.size())
 			return empty;
 		EnsureLineMetadataCacheSize();
 		if (!mBytecodeTextCacheValid[aLine]) {
@@ -339,7 +326,7 @@ namespace ImGui {
 			lineText.reserve(mLines[aLine].size());
 			for (const auto& glyph : mLines[aLine])
 				lineText += glyph.mChar;
-			mBytecodeTextCache[aLine] = mBytecodeCallback(aLine, lineText, nullptr);
+			mBytecodeTextCache[aLine] = mQueryParser->GetLineBytecode(lineText);
 			mBytecodeTextCacheValid[aLine] = 1;
 		}
 		return mBytecodeTextCache[aLine];
@@ -379,7 +366,7 @@ namespace ImGui {
 		bool done = false;
 		for (size_t fi = 0; fi < sCodeLensFiles.size() && !done; fi++) {
 			// Only suggest symbols from files parsed under the same language as this editor instance.
-			if (sCodeLensFiles[fi].language != mLanguageDefinitionId)
+			if (sCodeLensFiles[fi].language != mLanguageDefinition)
 				continue;
 			for (const auto& sym : sCodeLensFiles[fi].symbols) {
 				if (sym.symbolName.size() <= currentWord.size())
@@ -465,59 +452,14 @@ namespace ImGui {
 		}
 	}
 
-	void TextEditor::SetLanguageDefinition(LanguageDefinitionId aValue) {
-		mLanguageDefinitionId = aValue;
+	void TextEditor::SetLanguageDefinition(const ILanguageDefinition* aValue) {
+		mLanguageDefinition = aValue;
 		mTotalCodeLensDirty = true;
-		switch (mLanguageDefinitionId) {
-			case LanguageDefinitionId::None:
-				mLanguageDefinition = nullptr;
-				mTimingCallback = nullptr;
-				mBytecodeCallback = nullptr;
-				return;
-			case LanguageDefinitionId::Cpp:
-				mLanguageDefinition = &(LanguageDefinition::Cpp());
-				break;
-			case LanguageDefinitionId::C:
-				mLanguageDefinition = &(LanguageDefinition::C());
-				break;
-			case LanguageDefinitionId::Cs:
-				mLanguageDefinition = &(LanguageDefinition::Cs());
-				break;
-			case LanguageDefinitionId::Python:
-				mLanguageDefinition = &(LanguageDefinition::Python());
-				break;
-			case LanguageDefinitionId::Lua:
-				mLanguageDefinition = &(LanguageDefinition::Lua());
-				break;
-			case LanguageDefinitionId::Json:
-				mLanguageDefinition = &(LanguageDefinition::Json());
-				break;
-			case LanguageDefinitionId::Sql:
-				mLanguageDefinition = &(LanguageDefinition::Sql());
-				break;
-			case LanguageDefinitionId::AngelScript:
-				mLanguageDefinition = &(LanguageDefinition::AngelScript());
-				break;
-			case LanguageDefinitionId::Glsl:
-				mLanguageDefinition = &(LanguageDefinition::Glsl());
-				break;
-			case LanguageDefinitionId::Hlsl:
-				mLanguageDefinition = &(LanguageDefinition::Hlsl());
-				break;
-			case LanguageDefinitionId::Z80Asm:
-				mLanguageDefinition = &(LanguageDefinition::Z80Asm());
-				break;
-		}
-		if (mLanguageDefinition) {
-			mTimingCallback = mLanguageDefinition->mTimingCallback;
-			mBytecodeCallback = mLanguageDefinition->mBytecodeCallback;
-		} else {
-			mTimingCallback = nullptr;
-			mBytecodeCallback = nullptr;
-		}
-
+		delete mQueryParser;
+		mQueryParser = nullptr;
+		if (mLanguageDefinition != nullptr)
+			mQueryParser = mLanguageDefinition->CreateParser(this);
 		InvalidateLineMetadataCacheFromLine(0);
-
 		Colorize();
 		ScheduleCodeLensRefresh();
 	}
@@ -2177,6 +2119,7 @@ namespace ImGui {
 		assert(!mReadOnly);
 		auto& result = *mLines.insert(mLines.begin() + aIndex, Line());
 		InvalidateLineMetadataCacheFromLine(aIndex);
+		ShiftCacheOnInsert(aIndex);
 
 		for (int c = 0; c <= mState.mCurrentCursor; c++) // handle multiple cursors
 		{
@@ -2193,6 +2136,7 @@ namespace ImGui {
 
 		mLines.erase(mLines.begin() + aIndex);
 		InvalidateLineMetadataCacheFromLine(aIndex);
+		ShiftCacheOnDelete(aIndex);
 		assert(!mLines.empty());
 
 		// handle multiple cursors
@@ -2211,6 +2155,7 @@ namespace ImGui {
 
 		mLines.erase(mLines.begin() + aStart, mLines.begin() + aEnd);
 		InvalidateLineMetadataCacheFromLine(aStart);
+		ShiftCacheOnDeleteRange(aStart, aEnd);
 		assert(!mLines.empty());
 
 		// handle multiple cursors
@@ -2226,6 +2171,56 @@ namespace ImGui {
 				mState.mCursors[c].mInteractiveStart.mLine = targetLine;
 			}
 		}
+	}
+
+	void TextEditor::ShiftCacheOnInsert(int aLineIndex) {
+		if (mLineTopYCache.empty() || mLineCodeLensTextCache.empty())
+			return;
+		mLineCodeLensTextCache.insert(mLineCodeLensTextCache.begin() + aLineIndex, "");
+		const float newLineTop = mLineTopYCache[aLineIndex] + mCharAdvance.y;
+		mLineTopYCache.insert(mLineTopYCache.begin() + aLineIndex + 1, newLineTop);
+		for (int i = aLineIndex + 2; i < (int)mLineTopYCache.size(); i++)
+			mLineTopYCache[i] += mCharAdvance.y;
+		mLineTopYCacheLineCount = (int)mLineCodeLensTextCache.size();
+	}
+
+	void TextEditor::ShiftCacheOnDelete(int aLineIndex) {
+		if (mLineTopYCache.empty() || mLineCodeLensTextCache.empty() || aLineIndex >= (int)mLineCodeLensTextCache.size())
+			return;
+		const float codeLensLaneHeight = ImGui::GetFontSize() * 0.95f + 2.0f;
+		const bool hadCodeLens = !mLineCodeLensTextCache[aLineIndex].empty();
+		const float deletedHeight = mCharAdvance.y + (hadCodeLens ? codeLensLaneHeight : 0.0f);
+		if (hadCodeLens)
+			mTotalCodeLensHeight -= codeLensLaneHeight;
+		mLineCodeLensTextCache.erase(mLineCodeLensTextCache.begin() + aLineIndex);
+		if (aLineIndex + 1 < (int)mLineTopYCache.size())
+			mLineTopYCache.erase(mLineTopYCache.begin() + aLineIndex + 1);
+		for (int i = aLineIndex + 1; i < (int)mLineTopYCache.size(); i++)
+			mLineTopYCache[i] -= deletedHeight;
+		mLineTopYCacheLineCount = (int)mLineCodeLensTextCache.size();
+	}
+
+	void TextEditor::ShiftCacheOnDeleteRange(int aStart, int aEnd) {
+		if (mLineTopYCache.empty() || mLineCodeLensTextCache.empty() || aStart >= aEnd)
+			return;
+		const float codeLensLaneHeight = ImGui::GetFontSize() * 0.95f + 2.0f;
+		float removedHeight = 0.0f;
+		const int clampedEnd = std::min(aEnd, (int)mLineCodeLensTextCache.size());
+		for (int i = aStart; i < clampedEnd; i++) {
+			if (!mLineCodeLensTextCache[i].empty()) {
+				removedHeight += codeLensLaneHeight;
+				mTotalCodeLensHeight -= codeLensLaneHeight;
+			}
+			removedHeight += mCharAdvance.y;
+		}
+		mLineCodeLensTextCache.erase(mLineCodeLensTextCache.begin() + aStart, mLineCodeLensTextCache.begin() + clampedEnd);
+		const int yStart = aStart + 1;
+		const int yEnd = std::min(aEnd + 1, (int)mLineTopYCache.size());
+		if (yStart < yEnd)
+			mLineTopYCache.erase(mLineTopYCache.begin() + yStart, mLineTopYCache.begin() + yEnd);
+		for (int i = yStart; i < (int)mLineTopYCache.size(); i++)
+			mLineTopYCache[i] -= removedHeight;
+		mLineTopYCacheLineCount = (int)mLineCodeLensTextCache.size();
 	}
 
 	void TextEditor::DeleteRange(const Coordinates& aStart, const Coordinates& aEnd) {
@@ -2741,11 +2736,11 @@ namespace ImGui {
 			snprintf(lineNumberBuffer, 16, " %zu ", mLines.size());
 			mTextStart += ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f, lineNumberBuffer, nullptr, nullptr).x;
 		}
-		if (mShowTiming && mTimingCallback != nullptr) {
+		if (mShowTiming && HasTimingSupport()) {
 			snprintf(timingBuffer, 8, " 99999 ");
 			mTextStart += ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f, timingBuffer, nullptr, nullptr).x;
 		}
-		if (mShowBytecode && mBytecodeCallback != nullptr) {
+		if (mShowBytecode && mQueryParser != nullptr && mLanguageDefinition != nullptr && mLanguageDefinition->mHasBytecodeSupport) {
 			snprintf(bytecodeBuffer, 13, " 9999999999 ");
 			mTextStart += ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f, bytecodeBuffer, nullptr, nullptr).x;
 		}
@@ -2759,8 +2754,8 @@ namespace ImGui {
 		int maxColumnLimited = 0;
 		// Compute normalized file path once; used by total-height cache, EnsureCursorVisible, and the render loop.
 		const std::string currentFilePath = NormalizePath(mDocumentPath.empty() ? "<active-document>" : mDocumentPath);
-		// Rebuild the per-line Y cache when document content, codelens data, or font size changed.
-		// ComputeLineHasCodeLens is expensive (walks all symbol tables), so it runs here once on
+		// Rebuild the per-line Y and codelens-text caches when document content, codelens data, or font size changed.
+		// ComputeCodeLensTextForLine is expensive (walks all symbol tables), so it runs here once on
 		// dirty rather than every frame in the visible-line walk.
 		const int lineCount = (int)mLines.size();
 		if (mTotalCodeLensDirty || mTotalCodeLensVersion != sCodeLensDataVersion
@@ -2768,10 +2763,12 @@ namespace ImGui {
 			|| mLineTopYCacheCharAdvanceY != mCharAdvance.y) {
 			mTotalCodeLensHeight = 0.0f;
 			mLineTopYCache.resize((size_t)lineCount + 1);
+			mLineCodeLensTextCache.resize((size_t)lineCount);
 			mLineTopYCache[0] = 0.0f;
 			for (int ln = 0; ln < lineCount; ln++) {
+				mLineCodeLensTextCache[ln] = ComputeCodeLensTextForLine(ln, currentFilePath);
 				float lineH = mCharAdvance.y;
-				if (ComputeLineHasCodeLens(ln, currentFilePath)) {
+				if (!mLineCodeLensTextCache[ln].empty()) {
 					lineH += codeLensLaneHeight;
 					mTotalCodeLensHeight += codeLensLaneHeight;
 				}
@@ -2830,60 +2827,12 @@ namespace ImGui {
 				: 0.0f;
 			std::vector<std::pair<ImVec2, std::string>> pendingCodeLensTexts;
 			bool hasHoveredLineErrorTooltip = false;
-			const std::vector<CodeLensSymbolData>* currentFileSymbols = nullptr;
-			for (size_t fileIndex = 0; fileIndex < sCodeLensFiles.size(); fileIndex++)
-				if (sCodeLensFiles[fileIndex].filePath == currentFilePath) {
-					currentFileSymbols = &sCodeLensFiles[fileIndex].symbols;
-					break;
-				}
 
 			for (int lineNo = mFirstVisibleLine; lineNo <= mLastVisibleLine && lineNo < (int)mLines.size(); lineNo++) {
 				auto& line = mLines[lineNo];
-				std::string lineTextForCodeLens(line.size(), '\0');
-				for (size_t glyphIndex = 0; glyphIndex < line.size(); glyphIndex++)
-					lineTextForCodeLens[glyphIndex] = line[glyphIndex].mChar;
 				std::string codeLensText;
-				if (currentFileSymbols != nullptr) {
-					const std::string repeatSymbolName = BuildRepeatCodeLensSymbolName(currentFilePath, lineNo);
-					for (size_t symbolIndex = 0; symbolIndex < currentFileSymbols->size(); symbolIndex++) {
-						const CodeLensSymbolData& symbol = (*currentFileSymbols)[symbolIndex];
-						if (symbol.codelensText.empty())
-							continue;
-						if (symbol.symbolName != repeatSymbolName)
-							continue;
-						codeLensText = GetSingleLineCodeLensText(symbol.codelensText);
-						break;
-					}
-				}
-				if (codeLensText.empty() && !sCodeLensFiles.empty()) {
-					const CodeLensSymbolData* matchedCodeLensSymbol = nullptr;
-					for (size_t fileIndex = 0; fileIndex < sCodeLensFiles.size() && matchedCodeLensSymbol == nullptr; fileIndex++) {
-						const auto& symbols = sCodeLensFiles[fileIndex].symbols;
-						for (size_t symbolIndex = 0; symbolIndex < symbols.size(); symbolIndex++) {
-							const CodeLensSymbolData& symbol = symbols[symbolIndex];
-							if (symbol.codelensText.empty() || symbol.symbolName.empty())
-								continue;
-							int matchStart = 0;
-							if (!LineContainsWholeWord(lineTextForCodeLens, symbol.symbolName, &matchStart))
-								continue;
-							{
-								bool glyphInComment = false;
-								int matchWordSize = (int)symbol.symbolName.size();
-								for (int ci = matchStart; ci < matchStart + matchWordSize && ci < (int)line.size(); ci++)
-									if (line[ci].mComment || line[ci].mMultiLineComment) {
-										glyphInComment = true;
-										break;
-									}
-								if (glyphInComment)
-									continue;
-							}
-							matchedCodeLensSymbol = &symbol;
-							break;
-						}
-					}
-					if (matchedCodeLensSymbol != nullptr)
-						codeLensText = GetSingleLineCodeLensText(matchedCodeLensSymbol->codelensText);
-				}
+				if (lineNo < (int)mLineCodeLensTextCache.size())
+					codeLensText = GetSingleLineCodeLensText(mLineCodeLensTextCache[lineNo]);
 				bool hasCodeLens = !codeLensText.empty();
 				float lineTopY = cursorScreenPos.y + lineNo * mCharAdvance.y + dynamicCodeLensYOffset;
 				ImVec2 lineStartScreenPos = ImVec2(cursorScreenPos.x, lineTopY + (hasCodeLens ? codeLensLaneHeight : 0.0f));
@@ -3065,7 +3014,7 @@ namespace ImGui {
 										hoveredWordUpper[c] = (char)std::toupper((unsigned char)hoveredWord[c]);
 								}
 								for (size_t fileIndex = 0; fileIndex < sCodeLensFiles.size(); fileIndex++) {
-									if (sCodeLensFiles[fileIndex].language != mLanguageDefinitionId)
+									if (sCodeLensFiles[fileIndex].language != mLanguageDefinition)
 										continue;
 									const auto& symbols = sCodeLensFiles[fileIndex].symbols;
 									bool found = false;
@@ -3125,7 +3074,7 @@ namespace ImGui {
 								const CodeLensSymbolData* hoveredSymbol = nullptr;
 									std::string hoveredSymbolFilePath;
 									for (size_t fileIndex = 0; fileIndex < sCodeLensFiles.size() && hoveredSymbol == nullptr; fileIndex++) {
-										if (sCodeLensFiles[fileIndex].language != mLanguageDefinitionId)
+										if (sCodeLensFiles[fileIndex].language != mLanguageDefinition)
 											continue;
 										const auto& symbols = sCodeLensFiles[fileIndex].symbols;
 										for (size_t symbolIndex = 0; symbolIndex < symbols.size(); symbolIndex++) {
@@ -3183,7 +3132,9 @@ namespace ImGui {
 			// Background rect covers any code text that scrolled into the gutter area
 			float topY = cursorScreenPos.y + mFirstVisibleLine * mCharAdvance.y;
 			float bottomY = cursorScreenPos.y + std::min(mLastVisibleLine + 1, (int)mLines.size()) * mCharAdvance.y + dynamicCodeLensYOffset;
-			if (mShowLineNumbers || (mShowTiming && mTimingCallback != nullptr) || (mShowBytecode && mBytecodeCallback != nullptr)) {
+			const bool showTimingGutter = mShowTiming && HasTimingSupport();
+			const bool showBytecodeGutter = mShowBytecode && mQueryParser != nullptr && mLanguageDefinition != nullptr && mLanguageDefinition->mHasBytecodeSupport;
+			if (mShowLineNumbers || showTimingGutter || showBytecodeGutter) {
 				drawList->AddRectFilled(ImVec2(gutterX, topY), ImVec2(gutterX + mTextStart, bottomY), mPalette[(int)PaletteIndex::Background]);
 			}
 			// Draw line numbers gutter
@@ -3197,7 +3148,7 @@ namespace ImGui {
 				currentGutterRight += ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f, lineNumberBuffer, nullptr, nullptr).x;
 			}
 			// Draw timing gutter
-			if (mShowTiming && mTimingCallback != nullptr) {
+			if (showTimingGutter) {
 				for (int lineNo = mFirstVisibleLine; lineNo <= mLastVisibleLine && lineNo < (int)mLines.size(); lineNo++) {
 					float lineY = hasVisibleLineTextY[lineNo - mFirstVisibleLine] ? visibleLineTextY[lineNo - mFirstVisibleLine] : cursorScreenPos.y + lineNo * mCharAdvance.y;
 					const std::string& timingText = GetCachedTimingText(lineNo);
@@ -3210,7 +3161,7 @@ namespace ImGui {
 				currentGutterRight += ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f, timingBuffer, nullptr, nullptr).x;
 			}
 			// Draw bytecode gutter
-			if (mShowBytecode && mBytecodeCallback != nullptr) {
+			if (showBytecodeGutter) {
 				for (int lineNo = mFirstVisibleLine; lineNo <= mLastVisibleLine && lineNo < (int)mLines.size(); lineNo++) {
 					float lineY = hasVisibleLineTextY[lineNo - mFirstVisibleLine] ? visibleLineTextY[lineNo - mFirstVisibleLine] : cursorScreenPos.y + lineNo * mCharAdvance.y;
 					const std::string& bytecodeText = GetCachedBytecodeText(lineNo);
@@ -3239,22 +3190,17 @@ namespace ImGui {
 			const float effectiveH = windowH - sbSize;
 			const bool vscrollVisible = mCurrentSpaceHeight > effectiveH;
 			const float effectiveW = windowW - (vscrollVisible ? sbSize : 0.0f);
-			const float codeLensLaneH = ImGui::GetFontSize() * 0.95f + 2.0f;
 			for (int i = 0; i < (mEnsureCursorVisibleStartToo ? 2 : 1); i++) {
 				Coordinates targetCoords = GetSanitizedCursorCoordinates(mEnsureCursorVisible, i);
 				int cursorLine = targetCoords.mLine;
-				// Count codelens lane pixels above the cursor line so the scroll target
-				// places the cursor's actual rendered Y inside the viewport.
-				float codeLensAbove = 0.0f;
-				for (int ln = 0; ln < cursorLine; ln++)
-					if (ComputeLineHasCodeLens(ln, currentFilePath))
-						codeLensAbove += codeLensLaneH;
 				// cursorScrollBase: scroll-space Y of the top of the cursor line.
 				// Cursor occupies [cursorScrollBase, cursorScrollBase + mCharAdvance.y].
 				// Viewport occupies [mScrollY, mScrollY + effectiveH].
 				// Scroll up when cursor top is above viewport top.
 				// Scroll down when cursor bottom is below viewport bottom.
-				float cursorScrollBase = cursorLine * mCharAdvance.y + codeLensAbove;
+				float cursorScrollBase = (!mLineTopYCache.empty() && cursorLine < (int)mLineTopYCache.size())
+					? mLineTopYCache[cursorLine]
+					: cursorLine * mCharAdvance.y;
 				if (cursorScrollBase < mScrollY)
 					ImGui::SetScrollY(mScrollY = std::max(0.0f, cursorScrollBase));
 				else if (cursorScrollBase + mCharAdvance.y > mScrollY + effectiveH)
@@ -3281,17 +3227,26 @@ namespace ImGui {
 			mScrollToTop = false;
 		}
 		if (mSetViewAtLine > -1) {
+			const bool cacheValid = !mLineTopYCache.empty()
+				&& mSetViewAtLine < (int)mLines.size()
+				&& (mSetViewAtLine + 1) < (int)mLineTopYCache.size();
 			float targetScroll;
 			switch (mSetViewAtLineMode) {
 				default:
 				case SetViewAtLineMode::FirstVisibleLine:
-					targetScroll = std::max(0.0f, ((float)mSetViewAtLine - 0.5f) * mCharAdvance.y);
+					targetScroll = cacheValid
+						? std::max(0.0f, mLineTopYCache[mSetViewAtLine] - 0.5f * mCharAdvance.y)
+						: std::max(0.0f, ((float)mSetViewAtLine - 0.5f) * mCharAdvance.y);
 					break;
 				case SetViewAtLineMode::LastVisibleLine:
-					targetScroll = std::max(0.0f, ((float)mSetViewAtLine + 1.5f) * mCharAdvance.y - mContentHeight);
+					targetScroll = cacheValid
+						? std::max(0.0f, mLineTopYCache[mSetViewAtLine + 1] + 0.5f * mCharAdvance.y - mContentHeight)
+						: std::max(0.0f, ((float)mSetViewAtLine + 1.5f) * mCharAdvance.y - mContentHeight);
 					break;
 				case SetViewAtLineMode::Centered:
-					targetScroll = std::max(0.0f, ((float)mSetViewAtLine - (float)(mLastVisibleLine - mFirstVisibleLine) * 0.5f) * mCharAdvance.y);
+					targetScroll = cacheValid
+						? std::max(0.0f, mLineTopYCache[mSetViewAtLine] - (mContentHeight - mCharAdvance.y) * 0.5f)
+						: std::max(0.0f, ((float)mSetViewAtLine - (float)(mLastVisibleLine - mFirstVisibleLine) * 0.5f) * mCharAdvance.y);
 					break;
 			}
 			ImGui::SetScrollY(targetScroll);
@@ -3387,7 +3342,7 @@ namespace ImGui {
 	}
 
 	void TextEditor::RefreshCodeLensForCurrentDocument() {
-		if (mLanguageDefinitionId == LanguageDefinitionId::None)
+		if (mLanguageDefinition == nullptr)
 			return;
 		const std::string filePath = NormalizePath(mDocumentPath.empty() ? "<active-document>" : mDocumentPath);
 		// Snapshot current lines and enqueue with high priority.
@@ -3399,11 +3354,11 @@ namespace ImGui {
 			for (size_t j = 0; j < glyphs.size(); j++)
 				snapshot[i][j] = glyphs[j].mChar;
 		}
-		EnqueueCodeLensFile(filePath, mLanguageDefinitionId, snapshot, true);
+		EnqueueCodeLensFile(filePath, mLanguageDefinition, snapshot, true);
 	}
 
 	void TextEditor::ScheduleCodeLensRefresh() {
-		if (mLanguageDefinitionId == LanguageDefinitionId::None)
+		if (mLanguageDefinition == nullptr)
 			return;
 		mCodeLensPendingRefresh = true;
 		mCodeLensLastEditTime = ImGui::GetTime();
@@ -3411,8 +3366,26 @@ namespace ImGui {
 		// Cancel any in-progress or queued parse for this file; document state is now stale.
 		const std::string filePath = NormalizePath(mDocumentPath.empty() ? "<active-document>" : mDocumentPath);
 		if (sCodeLensActiveParseInProgress && sCodeLensActiveFilePath == filePath) {
-			if (sCodeLensActiveLanguageDef != nullptr && sCodeLensActiveLanguageDef->mCodeLensParseEnd != nullptr)
-				sCodeLensActiveLanguageDef->mCodeLensParseEnd(filePath);
+			if (sCodeLensActiveParser != nullptr) {
+				std::vector<UnclosedBlock> unclosed;
+				for (int ti = 0; ti < (int)mBlockTrackers.size(); ti++) {
+					for (const auto& entry : mBlockTrackers[ti].entries) {
+						if (!entry.closed) {
+							UnclosedBlock b;
+							b.trackerHandle = ti;
+							b.blockId = entry.blockId;
+							b.line = entry.line;
+							b.col = entry.col;
+							b.description = entry.description;
+							unclosed.push_back(b);
+						}
+					}
+				}
+				sCodeLensActiveParser->ParseEnd(filePath, unclosed);
+				delete sCodeLensActiveParser;
+				sCodeLensActiveParser = nullptr;
+				mBlockTrackers.clear();
+			}
 			sCodeLensActiveParseInProgress = false;
 			sCodeLensActiveSymbolsCleared = false;
 			sCodeLensActiveLines.clear();
@@ -3427,8 +3400,26 @@ namespace ImGui {
 		// Cancel the active global parse if it belongs to this editor's file.
 		bool needsRestore = false;
 		if (sCodeLensActiveParseInProgress && sCodeLensActiveFilePath == filePath) {
-			if (sCodeLensActiveLanguageDef != nullptr && sCodeLensActiveLanguageDef->mCodeLensParseEnd != nullptr)
-				sCodeLensActiveLanguageDef->mCodeLensParseEnd(filePath);
+			if (sCodeLensActiveParser != nullptr) {
+				std::vector<UnclosedBlock> unclosed;
+				for (int ti = 0; ti < (int)mBlockTrackers.size(); ti++) {
+					for (const auto& entry : mBlockTrackers[ti].entries) {
+						if (!entry.closed) {
+							UnclosedBlock b;
+							b.trackerHandle = ti;
+							b.blockId = entry.blockId;
+							b.line = entry.line;
+							b.col = entry.col;
+							b.description = entry.description;
+							unclosed.push_back(b);
+						}
+					}
+				}
+				sCodeLensActiveParser->ParseEnd(filePath, unclosed);
+				delete sCodeLensActiveParser;
+				sCodeLensActiveParser = nullptr;
+				mBlockTrackers.clear();
+			}
 			needsRestore = sCodeLensActiveSymbolsCleared;
 			sCodeLensActiveParseInProgress = false;
 			sCodeLensActiveSymbolsCleared = false;
@@ -3441,18 +3432,16 @@ namespace ImGui {
 		mCodeLensPendingRefresh = false;
 		if (!needsRestore)
 			return;
-		if (mLanguageDefinitionId == LanguageDefinitionId::None)
+		if (mLanguageDefinition == nullptr)
 			return;
 		// Symbols were cleared mid-parse; schedule a disk restore so the codelens table is not left empty.
 		if (filePath == "<active-document>")
 			return;
-		EnqueueCodeLensFile(filePath, mLanguageDefinitionId);
+		EnqueueCodeLensFile(filePath, mLanguageDefinition);
 	}
 
 	void TextEditor::TickIncrementalCodeLensParse() {
-		if (mLanguageDefinitionId == LanguageDefinitionId::None)
-			return;
-		if (mLanguageDefinition == nullptr || mLanguageDefinition->mCodeLensLineParser == nullptr)
+		if (mLanguageDefinition == nullptr)
 			return;
 		if (!mCodeLensPendingRefresh)
 			return;
@@ -3470,7 +3459,7 @@ namespace ImGui {
 			for (size_t j = 0; j < glyphs.size(); j++)
 				snapshot[i][j] = glyphs[j].mChar;
 		}
-		EnqueueCodeLensFile(filePath, mLanguageDefinitionId, snapshot, true);
+		EnqueueCodeLensFile(filePath, mLanguageDefinition, snapshot, true);
 		mCodeLensPendingRefresh = false;
 	}
 
@@ -3487,7 +3476,7 @@ namespace ImGui {
 	}
 
 	void TextEditor::ColorizeRange(int aFromLine, int aToLine) {
-		if (mLines.empty() || aFromLine >= aToLine || mLanguageDefinition == nullptr)
+		if (mLines.empty() || aFromLine >= aToLine || mQueryParser == nullptr)
 			return;
 
 		std::string buffer;
@@ -3519,10 +3508,8 @@ namespace ImGui {
 
 				bool hasTokenizeResult = false;
 
-				if (mLanguageDefinition->mTokenize != nullptr) {
-					if (mLanguageDefinition->mTokenize(first, last, token_begin, token_end, token_color))
-						hasTokenizeResult = true;
-				}
+				if (mQueryParser->SyntaxHighlight(first, last, token_begin, token_end, token_color))
+					hasTokenizeResult = true;
 
 				if (hasTokenizeResult == false) {
 					first++;
@@ -3566,7 +3553,7 @@ namespace ImGui {
 		return first1 == last1 && first2 == last2;
 	}
 	void TextEditor::ColorizeInternal() {
-		if (mLines.empty() || mLanguageDefinition == nullptr)
+		if (mLines.empty() || mLanguageDefinition == nullptr || mQueryParser == nullptr)
 			return;
 
 		if (mCheckComments) {
@@ -3673,8 +3660,7 @@ namespace ImGui {
 
 		if (mColorRangeMin < mColorRangeMax) {
 			// Tokenize at most `increment` lines per frame to spread the cost across multiple frames.
-			// When there is no custom tokenizer the increment is small because the fallback is cheaper.
-			const int increment = (mLanguageDefinition->mTokenize == nullptr) ? 10 : 10000;
+			const int increment = 10000;
 			const int to = std::min(mColorRangeMin + increment, mColorRangeMax);
 			ColorizeRange(mColorRangeMin, to);
 			mColorRangeMin = to;
@@ -3711,6 +3697,11 @@ namespace ImGui {
 			0x00000040, // Current line fill
 			0x80808040, // Current line fill (inactive)
 			0xa0a0a040, // Current line edge
+			0x7cb5c0ff, // Operator
+			0x56b6c2ff, // Register
+			0x61afefff, // Mnemonic
+			0xe5a34aff, // Label
+			0x98c379ff, // Type
 		}};
 		return p;
 	}
@@ -3739,6 +3730,11 @@ namespace ImGui {
 			0x4e5a6580, // Current line fill
 			0x4e5a6530, // Current line fill (inactive)
 			0x4e5a65b0, // Current line edge
+			0x7cb5b4ff, // Operator
+			0x5fb4b4ff, // Register
+			0x6cbfe8ff, // Mnemonic
+			0xf9ae58ff, // Label
+			0x99c794ff, // Type
 		}};
 		return p;
 	}
@@ -3767,6 +3763,11 @@ namespace ImGui {
 			0x00000040, // Current line fill
 			0x80808040, // Current line fill (inactive)
 			0x00000040, // Current line edge
+			0x005060ff, // Operator
+			0x006080ff, // Register
+			0x0040a0ff, // Mnemonic
+			0x804000ff, // Label
+			0x206020ff, // Type
 		}};
 		return p;
 	}
@@ -3795,6 +3796,11 @@ namespace ImGui {
 			0x00000040, // Current line fill
 			0x80808040, // Current line fill (inactive)
 			0x00000040, // Current line edge
+			0xffffffff, // Operator
+			0x80e0ffff, // Register
+			0x60c0ffff, // Mnemonic
+			0xffc040ff, // Label
+			0x80ff80ff, // Type
 		}};
 		return p;
 	}
@@ -3802,67 +3808,214 @@ namespace ImGui {
 	const std::unordered_map<char, char> TextEditor::OPEN_TO_CLOSE_CHAR = {{'{', '}'}, {'(', ')'}, {'[', ']'}};
 	const std::unordered_map<char, char> TextEditor::CLOSE_TO_OPEN_CHAR = {{'}', '{'}, {')', '('}, {']', '['}};
 
+	// --------------------------------------- //
+	// ---- TextEditorMI implementations ----- //
+
+	std::vector<std::string> TextEditorMI::TokenizeWords(const std::string& lineText, char stopChar) {
+		std::vector<std::string> tokens;
+		std::string current;
+		for (size_t i = 0; i < lineText.size(); i++) {
+			char c = lineText[i];
+			if (stopChar != 0 && c == stopChar)
+				break;
+			if (IsIdentifierWordByte(c)) {
+				current += c;
+			} else {
+				if (!current.empty()) {
+					tokens.push_back(current);
+					current.clear();
+				}
+			}
+		}
+		if (!current.empty())
+			tokens.push_back(current);
+		return tokens;
+	}
+
+	std::string TextEditorMI::ExtractLeadingComment(const std::deque<std::pair<int, std::string>>& recentLines,
+	                                                 int targetLine, const std::string& commentPrefix) {
+		if (commentPrefix.empty() || recentLines.empty())
+			return "";
+		// Find the target line index in the deque (most recent is at back).
+		int startIdx = -1;
+		for (int i = (int)recentLines.size() - 1; i >= 0; i--) {
+			if (recentLines[i].first == targetLine - 1) {
+				startIdx = i;
+				break;
+			}
+		}
+		if (startIdx < 0)
+			return "";
+		// Walk backwards collecting contiguous comment lines.
+		std::vector<std::string> commentLines;
+		int expectedLine = targetLine - 1;
+		for (int i = startIdx; i >= 0; i--) {
+			if (recentLines[i].first != expectedLine)
+				break;
+			const std::string& lineText = recentLines[i].second;
+			// Trim leading whitespace.
+			size_t pos = 0;
+			while (pos < lineText.size() && char_isspace(lineText[pos]))
+				pos++;
+			// Check comment prefix.
+			if (lineText.compare(pos, commentPrefix.size(), commentPrefix) != 0)
+				break;
+			commentLines.push_back(lineText.substr(pos + commentPrefix.size()));
+			expectedLine--;
+		}
+		if (commentLines.empty())
+			return "";
+		// Reverse to restore top-to-bottom order.
+		std::string result;
+		for (int i = (int)commentLines.size() - 1; i >= 0; i--) {
+			if (!result.empty())
+				result += '\n';
+			result += commentLines[i];
+		}
+		return result;
+	}
+
+	int TextEditorMI::AllocateBlockTracker() {
+		mBlockTrackers.push_back(BlockTracker());
+		return (int)mBlockTrackers.size() - 1;
+	}
+
+	int TextEditorMI::OpenBlock(int trackerHandle, int line, int col, const std::string& description) {
+		if (trackerHandle < 0 || trackerHandle >= (int)mBlockTrackers.size())
+			return -1;
+		BlockTracker& tracker = mBlockTrackers[trackerHandle];
+		int blockId = tracker.mNextBlockId++;
+		BlockEntry entry;
+		entry.blockId = blockId;
+		entry.line = line;
+		entry.col = col;
+		entry.description = description;
+		entry.closed = false;
+		tracker.entries.push_back(entry);
+		return blockId;
+	}
+
+	void TextEditorMI::CloseBlock(int trackerHandle, int blockId) {
+		if (trackerHandle < 0 || trackerHandle >= (int)mBlockTrackers.size())
+			return;
+		BlockTracker& tracker = mBlockTrackers[trackerHandle];
+		for (auto& entry : tracker.entries) {
+			if (entry.blockId == blockId) {
+				entry.closed = true;
+				return;
+			}
+		}
+	}
+
+	std::vector<UnclosedBlock> TextEditorMI::CollectUnclosedBlocks() const {
+		std::vector<UnclosedBlock> unclosed;
+		for (int ti = 0; ti < (int)mBlockTrackers.size(); ti++) {
+			for (const auto& entry : mBlockTrackers[ti].entries) {
+				if (!entry.closed) {
+					UnclosedBlock b;
+					b.trackerHandle = ti;
+					b.blockId = entry.blockId;
+					b.line = entry.line;
+					b.col = entry.col;
+					b.description = entry.description;
+					unclosed.push_back(b);
+				}
+			}
+		}
+		return unclosed;
+	}
+
+	// --------------------------------------- //
+	// --- StaticCodeLensHost (parse jobs) --- //
+
+	//
+	// Internal host used by TickGlobalCodeLensParse and ParseCodeLensFromText for background parse jobs.
+	// All codelens virtual methods delegate to TextEditor static data. Not exposed in the header.
+	//
+	class StaticCodeLensHost : public TextEditorMI {
+	public:
+		void AddCodeLensSymbol(const std::string& filePath, const CodeLensSymbolData& symbol) override {
+			TextEditor::RegisterCodeLensSymbol(filePath, symbol);
+		}
+		void AddCodeLensSymbolIfNew(const std::string& filePath, const CodeLensSymbolData& symbol) override {
+			TextEditor::RegisterCodeLensSymbolIfNew(filePath, symbol);
+		}
+		void DeleteCodeLensSymbol(const std::string& filePath, const std::string& symbolName) override {
+			TextEditor::sDeleteCodeLensSymbol(filePath, symbolName);
+		}
+		void AddCodeLensError(const std::string& filePath, int lineNumber, const std::string& message) override {
+			TextEditor::sAddCodeLensError(filePath, lineNumber, message);
+		}
+		const std::vector<CodeLensFileData>& GetCodeLensFiles() const override {
+			return TextEditor::AllCodeLensFiles();
+		}
+		void EnqueueCodeLensFile(const std::string& filePath, const ILanguageDefinition* language,
+		                          const std::vector<std::string>& lines = {}, bool highPriority = false) override {
+			TextEditor::EnqueueCodeLensFileStatic(filePath, language, lines, highPriority);
+		}
+	};
+
+	static StaticCodeLensHost sStaticParseHost;
+
 	TextEditor::PaletteId TextEditor::defaultPalette = TextEditor::PaletteId::Dark;
 	std::vector<TextEditor::CodeLensFileData> TextEditor::sCodeLensFiles;
 	std::vector<TextEditor::CodeLensParseTask> TextEditor::sCodeLensParseQueue;
 	std::string TextEditor::sCodeLensActiveFilePath;
-	TextEditor::LanguageDefinitionId TextEditor::sCodeLensActiveLanguage = TextEditor::LanguageDefinitionId::None;
-	const TextEditor::LanguageDefinition* TextEditor::sCodeLensActiveLanguageDef = nullptr;
+	ILanguageParser* TextEditor::sCodeLensActiveParser = nullptr;
+	const ILanguageDefinition* TextEditor::sCodeLensActiveLanguageDef = nullptr;
 	std::vector<std::string> TextEditor::sCodeLensActiveLines;
 	int TextEditor::sCodeLensActiveNextLine = 0;
 	bool TextEditor::sCodeLensActiveParseInProgress = false;
 	bool TextEditor::sCodeLensActiveSymbolsCleared = false;
 	int TextEditor::sCodeLensDataVersion = 0;
 
-	bool TextEditor::ComputeLineHasCodeLens(int aLine, const std::string& aCurrentFilePath) const {
+	std::string TextEditor::ComputeCodeLensTextForLine(int aLine, const std::string& aCurrentFilePath) const {
 		if (sCodeLensFiles.empty() || aLine < 0 || aLine >= (int)mLines.size())
-			return false;
+			return "";
 		const auto& lineGlyphs = mLines[aLine];
-		// Check the repeat-block synthetic symbol first (file + line number key).
+		// First pass: check repeat-block synthetic symbol for the current file only (mirrors render loop).
 		const std::string repeatKey = BuildRepeatCodeLensSymbolName(aCurrentFilePath, aLine);
 		for (size_t fi = 0; fi < sCodeLensFiles.size(); fi++) {
+			if (sCodeLensFiles[fi].filePath != aCurrentFilePath)
+				continue;
 			const auto& symbols = sCodeLensFiles[fi].symbols;
 			for (size_t si = 0; si < symbols.size(); si++) {
 				if (symbols[si].codelensText.empty())
 					continue;
 				if (symbols[si].symbolName == repeatKey)
-					return true;
+					return symbols[si].codelensText;
 			}
 		}
-		// Check word-match symbols across all files.
+		// Second pass: word-match across all files of the same language (mirrors render loop).
 		const int lineSize = (int)lineGlyphs.size();
+		std::string lineText(lineSize, '\0');
+		for (int i = 0; i < lineSize; i++)
+			lineText[i] = lineGlyphs[i].mChar;
 		for (size_t fi = 0; fi < sCodeLensFiles.size(); fi++) {
+			if (sCodeLensFiles[fi].language != mLanguageDefinition)
+				continue;
 			const auto& symbols = sCodeLensFiles[fi].symbols;
 			for (size_t si = 0; si < symbols.size(); si++) {
 				const CodeLensSymbolData& sym = symbols[si];
 				if (sym.codelensText.empty() || sym.symbolName.empty())
 					continue;
+				int matchStart = 0;
+				if (!LineContainsWholeWord(lineText, sym.symbolName, &matchStart))
+					continue;
+				if (!sym.referenceDisplay && sym.lineNumber != aLine)
+					continue;
+				bool inComment = false;
 				const int wordSize = (int)sym.symbolName.size();
-				for (int ci = 0; ci + wordSize <= lineSize; ci++) {
-					bool matched = true;
-					for (int j = 0; j < wordSize; j++)
-						if ((char)std::toupper((unsigned char)lineGlyphs[ci + j].mChar) != (char)std::toupper((unsigned char)sym.symbolName[j])) {
-							matched = false;
-							break;
-						}
-					if (!matched)
-						continue;
-					const bool leftBoundary = (ci == 0) || !IsIdentifierWordByte(lineGlyphs[ci - 1].mChar);
-					const bool rightBoundary = (ci + wordSize >= lineSize) || !IsIdentifierWordByte(lineGlyphs[ci + wordSize].mChar);
-					if (!leftBoundary || !rightBoundary)
-						continue;
-					bool inComment = false;
-					for (int ki = ci; ki < ci + wordSize && ki < lineSize; ki++)
-						if (lineGlyphs[ki].mComment || lineGlyphs[ki].mMultiLineComment) {
-							inComment = true;
-							break;
-						}
-					if (!inComment)
-						return true;
-				}
+				for (int ki = matchStart; ki < matchStart + wordSize && ki < lineSize; ki++)
+					if (lineGlyphs[ki].mComment || lineGlyphs[ki].mMultiLineComment) {
+						inComment = true;
+						break;
+					}
+				if (!inComment)
+					return sym.codelensText;
 			}
 		}
-		return false;
+		return "";
 	}
 
 	void TextEditor::ClearCodeLensData() {
@@ -3881,17 +4034,18 @@ namespace ImGui {
 		return (int)sCodeLensFiles.size() - 1;
 	}
 
-	void TextEditor::SetCodeLensFileLanguage(const std::string& aFilePath, LanguageDefinitionId aLanguage) {
-		const std::string normalizedPath = NormalizePath(aFilePath);
-		for (int i = 0; i < (int)sCodeLensFiles.size(); i++)
-			if (sCodeLensFiles[i].filePath == normalizedPath) {
-				sCodeLensFiles[i].language = aLanguage;
-				return;
-			}
+	const std::vector<TextEditor::CodeLensFileData>& TextEditor::AllCodeLensFiles() {
+		return sCodeLensFiles;
 	}
 
-	const std::vector<TextEditor::CodeLensFileData>& TextEditor::GetCodeLensFiles() {
+	const std::vector<TextEditor::CodeLensFileData>& TextEditor::GetCodeLensFiles() const {
 		return sCodeLensFiles;
+	}
+
+	void TextEditor::AddCodeLensSymbol(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData) {
+		int fi = AddOrUpdateCodeLensSymbol(aFilePath, aSymbolData);
+		if (sCodeLensActiveLanguageDef != nullptr)
+			sCodeLensFiles[fi].language = sCodeLensActiveLanguageDef;
 	}
 
 	int TextEditor::AddOrUpdateCodeLensSymbol(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData) {
@@ -3900,10 +4054,28 @@ namespace ImGui {
 		for (int i = 0; i < (int)symbols.size(); i++)
 			if (symbols[i].lineNumber == aSymbolData.lineNumber && symbols[i].symbolName == aSymbolData.symbolName) {
 				symbols[i] = aSymbolData;
-				return i;
+				return fileIndex;
 			}
 		symbols.push_back(aSymbolData);
-		return (int)symbols.size() - 1;
+		return fileIndex;
+	}
+
+	void TextEditor::RegisterCodeLensSymbol(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData) {
+		int fi = AddOrUpdateCodeLensSymbol(aFilePath, aSymbolData);
+		if (sCodeLensActiveLanguageDef != nullptr)
+			sCodeLensFiles[fi].language = sCodeLensActiveLanguageDef;
+	}
+
+	void TextEditor::RegisterCodeLensSymbolIfNew(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData) {
+		bool added = sAddCodeLensSymbolIfNew(aFilePath, aSymbolData);
+		if (added && sCodeLensActiveLanguageDef != nullptr) {
+			const std::string norm = NormalizePath(aFilePath);
+			for (auto& f : sCodeLensFiles)
+				if (f.filePath == norm) {
+					f.language = sCodeLensActiveLanguageDef;
+					break;
+				}
+		}
 	}
 
 	std::string TextEditor::ConsumeRightClickWord() {
@@ -3922,7 +4094,7 @@ namespace ImGui {
 		return mLastHoveredWord;
 	}
 
-	bool TextEditor::AddCodeLensSymbolIfNew(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData) {
+	bool TextEditor::sAddCodeLensSymbolIfNew(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData) {
 		// Check all files: if any file already has a symbol with this name, do not insert.
 		for (size_t fileIndex = 0; fileIndex < sCodeLensFiles.size(); fileIndex++) {
 			const auto& symbols = sCodeLensFiles[fileIndex].symbols;
@@ -3934,7 +4106,11 @@ namespace ImGui {
 		return true;
 	}
 
-	int TextEditor::DeleteCodeLensSymbol(const std::string& aFilePath, const std::string& aSymbolName) {
+	void TextEditor::AddCodeLensSymbolIfNew(const std::string& aFilePath, const CodeLensSymbolData& aSymbolData) {
+		sAddCodeLensSymbolIfNew(aFilePath, aSymbolData);
+	}
+
+	int TextEditor::sDeleteCodeLensSymbol(const std::string& aFilePath, const std::string& aSymbolName) {
 		if (aSymbolName.empty())
 			return 0;
 		const std::string normalizedPath = NormalizePath(aFilePath);
@@ -3954,7 +4130,11 @@ namespace ImGui {
 		return removed;
 	}
 
-	int TextEditor::AddCodeLensError(const std::string& aFilePath, int aLineNumber, const std::string& aMessage) {
+	void TextEditor::DeleteCodeLensSymbol(const std::string& aFilePath, const std::string& aSymbolName) {
+		sDeleteCodeLensSymbol(aFilePath, aSymbolName);
+	}
+
+	int TextEditor::sAddCodeLensError(const std::string& aFilePath, int aLineNumber, const std::string& aMessage) {
 		int fileIndex = AddCodeLensFile(aFilePath);
 		auto& errors = sCodeLensFiles[fileIndex].errors;
 		for (int i = 0; i < (int)errors.size(); i++)
@@ -3964,32 +4144,47 @@ namespace ImGui {
 		return (int)errors.size() - 1;
 	}
 
-	bool TextEditor::ParseCodeLensFromText(const std::string& aFilePath, const std::string& aText, LanguageDefinitionId aLanguage) {
+	void TextEditor::AddCodeLensError(const std::string& aFilePath, int aLineNumber, const std::string& aMessage) {
+		sAddCodeLensError(aFilePath, aLineNumber, aMessage);
+	}
+
+	bool TextEditor::ParseCodeLensFromText(const std::string& aFilePath, const std::string& aText, const ILanguageDefinition* aLanguage) {
 		int fileIndex = AddCodeLensFile(aFilePath);
 		sCodeLensFiles[fileIndex].language = aLanguage;
 		sCodeLensFiles[fileIndex].symbols.clear();
 		sCodeLensFiles[fileIndex].errors.clear();
-		const LanguageDefinition* languageDefinition = GetLanguageDefinitionForId(aLanguage);
-		if (languageDefinition == nullptr || languageDefinition->mCodeLensLineParser == nullptr)
+		if (aLanguage == nullptr)
 			return true;
-		if (languageDefinition->mCodeLensParseStart != nullptr)
-			languageDefinition->mCodeLensParseStart(aFilePath, (void*)&languageDefinition->mTimingType);
-		std::istringstream stream(aText);
-		std::string lineText;
-		int lineNumber = 0;
-		while (std::getline(stream, lineText)) {
-			if (!lineText.empty() && lineText.back() == '\r')
-				lineText.pop_back();
-			languageDefinition->mCodeLensLineParser(lineNumber, aFilePath, lineText);
-			lineNumber++;
+		//
+		// Use a temporary StaticCodeLensHost as the parse host so the parser can call back into the codelens registry.
+		// sCodeLensActiveLanguageDef is set so that AddCodeLensSymbol auto-tags file entries with the language.
+		//
+		const ILanguageDefinition* prevLangDef = sCodeLensActiveLanguageDef;
+		sCodeLensActiveLanguageDef = aLanguage;
+		ILanguageParser* parser = aLanguage->CreateParser(&sStaticParseHost);
+		if (parser != nullptr) {
+			sStaticParseHost.ClearBlockTrackers();
+			parser->ParseStart(aFilePath);
+			std::istringstream stream(aText);
+			std::string lineText;
+			int lineNumber = 0;
+			while (std::getline(stream, lineText)) {
+				if (!lineText.empty() && lineText.back() == '\r')
+					lineText.pop_back();
+				parser->ParseLine(lineNumber, aFilePath, lineText);
+				lineNumber++;
+			}
+			std::vector<UnclosedBlock> unclosed = sStaticParseHost.CollectUnclosedBlocks();
+			parser->ParseEnd(aFilePath, unclosed);
+			sStaticParseHost.ClearBlockTrackers();
+			delete parser;
 		}
-		if (languageDefinition->mCodeLensParseEnd != nullptr)
-			languageDefinition->mCodeLensParseEnd(aFilePath);
+		sCodeLensActiveLanguageDef = prevLangDef;
 		sCodeLensDataVersion++;
 		return true;
 	}
 
-	bool TextEditor::ParseCodeLensFromFile(const std::string& aFilePath, LanguageDefinitionId aLanguage) {
+	bool TextEditor::ParseCodeLensFromFile(const std::string& aFilePath, const ILanguageDefinition* aLanguage) {
 		std::ifstream file(aFilePath, std::ios::binary);
 		if (!file.good())
 			return false;
@@ -3997,41 +4192,22 @@ namespace ImGui {
 		return ParseCodeLensFromText(aFilePath, text, aLanguage);
 	}
 
-	const TextEditor::LanguageDefinition* TextEditor::GetLanguageDefinitionForId(LanguageDefinitionId aId) {
-		switch (aId) {
-			case LanguageDefinitionId::Cpp:
-				return &LanguageDefinition::Cpp();
-			case LanguageDefinitionId::C:
-				return &LanguageDefinition::C();
-			case LanguageDefinitionId::Cs:
-				return &LanguageDefinition::Cs();
-			case LanguageDefinitionId::Python:
-				return &LanguageDefinition::Python();
-			case LanguageDefinitionId::Lua:
-				return &LanguageDefinition::Lua();
-			case LanguageDefinitionId::Json:
-				return &LanguageDefinition::Json();
-			case LanguageDefinitionId::Sql:
-				return &LanguageDefinition::Sql();
-			case LanguageDefinitionId::AngelScript:
-				return &LanguageDefinition::AngelScript();
-			case LanguageDefinitionId::Glsl:
-				return &LanguageDefinition::Glsl();
-			case LanguageDefinitionId::Hlsl:
-				return &LanguageDefinition::Hlsl();
-			case LanguageDefinitionId::Z80Asm:
-				return &LanguageDefinition::Z80Asm();
-			default:
-				return nullptr;
-		}
+	void TextEditor::EnqueueCodeLensFile(const std::string& aFilePath, const ILanguageDefinition* aLanguage,
+	                                      const std::vector<std::string>& aLines, bool aHighPriority) {
+		EnqueueCodeLensFileStatic(aFilePath, aLanguage, aLines, aHighPriority);
 	}
 
-	void TextEditor::EnqueueCodeLensFile(const std::string& aFilePath, LanguageDefinitionId aLanguage, const std::vector<std::string>& aLines, bool aHighPriority) {
+	void TextEditor::EnqueueCodeLensFileStatic(const std::string& aFilePath, const ILanguageDefinition* aLanguage, const std::vector<std::string>& aLines, bool aHighPriority) {
 		const std::string normalizedPath = NormalizePath(aFilePath);
 		// If this file is currently being parsed, abort that run; the new snapshot supersedes it.
 		if (sCodeLensActiveParseInProgress && sCodeLensActiveFilePath == normalizedPath) {
-			if (sCodeLensActiveLanguageDef != nullptr && sCodeLensActiveLanguageDef->mCodeLensParseEnd != nullptr)
-				sCodeLensActiveLanguageDef->mCodeLensParseEnd(aFilePath);
+			if (sCodeLensActiveParser != nullptr) {
+				std::vector<UnclosedBlock> unclosed = sStaticParseHost.CollectUnclosedBlocks();
+				sCodeLensActiveParser->ParseEnd(aFilePath, unclosed);
+				sStaticParseHost.ClearBlockTrackers();
+				delete sCodeLensActiveParser;
+				sCodeLensActiveParser = nullptr;
+			}
 			sCodeLensActiveParseInProgress = false;
 			sCodeLensActiveSymbolsCleared = false;
 			sCodeLensActiveLines.clear();
@@ -4058,8 +4234,7 @@ namespace ImGui {
 			// Dequeue the next file to parse.
 			CodeLensParseTask task = std::move(sCodeLensParseQueue.front());
 			sCodeLensParseQueue.erase(sCodeLensParseQueue.begin());
-			const LanguageDefinition* langDef = GetLanguageDefinitionForId(task.language);
-			if (langDef == nullptr || langDef->mCodeLensLineParser == nullptr)
+			if (task.language == nullptr)
 				return !sCodeLensParseQueue.empty();
 			// No snapshot provided: load file from disk now.
 			if (task.lines.empty()) {
@@ -4081,25 +4256,33 @@ namespace ImGui {
 			sCodeLensFiles[fileIndex].symbols.clear();
 			sCodeLensFiles[fileIndex].errors.clear();
 			sCodeLensActiveFilePath = std::move(task.filePath);
-			sCodeLensActiveLanguage = task.language;
-			sCodeLensActiveLanguageDef = langDef;
+			sCodeLensActiveLanguageDef = task.language;
 			sCodeLensActiveLines = std::move(task.lines);
 			sCodeLensActiveNextLine = 0;
 			sCodeLensActiveSymbolsCleared = true;
-			if (langDef->mCodeLensParseStart != nullptr)
-				langDef->mCodeLensParseStart(sCodeLensActiveFilePath, (void*)&langDef->mTimingType);
+			sStaticParseHost.ClearBlockTrackers();
+			sCodeLensActiveParser = task.language->CreateParser(&sStaticParseHost);
+			if (sCodeLensActiveParser != nullptr)
+				sCodeLensActiveParser->ParseStart(sCodeLensActiveFilePath);
 			sCodeLensActiveParseInProgress = true;
 		}
 		// Feed up to aMaxLines lines to the active parser.
 		const int totalLines = (int)sCodeLensActiveLines.size();
 		const int endLine = std::min(sCodeLensActiveNextLine + aMaxLines, totalLines);
-		for (int i = sCodeLensActiveNextLine; i < endLine; i++)
-			sCodeLensActiveLanguageDef->mCodeLensLineParser(i, sCodeLensActiveFilePath, sCodeLensActiveLines[i]);
+		if (sCodeLensActiveParser != nullptr) {
+			for (int i = sCodeLensActiveNextLine; i < endLine; i++)
+				sCodeLensActiveParser->ParseLine(i, sCodeLensActiveFilePath, sCodeLensActiveLines[i]);
+		}
 		sCodeLensActiveNextLine = endLine;
 		if (sCodeLensActiveNextLine >= totalLines) {
 			// Parse complete: notify the language and release active state.
-			if (sCodeLensActiveLanguageDef->mCodeLensParseEnd != nullptr)
-				sCodeLensActiveLanguageDef->mCodeLensParseEnd(sCodeLensActiveFilePath);
+			if (sCodeLensActiveParser != nullptr) {
+				std::vector<UnclosedBlock> unclosed = sStaticParseHost.CollectUnclosedBlocks();
+				sCodeLensActiveParser->ParseEnd(sCodeLensActiveFilePath, unclosed);
+				sStaticParseHost.ClearBlockTrackers();
+				delete sCodeLensActiveParser;
+				sCodeLensActiveParser = nullptr;
+			}
 			sCodeLensActiveParseInProgress = false;
 			sCodeLensActiveSymbolsCleared = false;
 			sCodeLensActiveLines.clear();

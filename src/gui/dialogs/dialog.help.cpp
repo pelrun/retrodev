@@ -1215,7 +1215,7 @@ namespace RetrodevGui {
 		// Center the popup on the main viewport
 		//
 		ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-		ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+		ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 		ImGui::SetNextWindowSize(ImVec2(1440.0f, 860.0f), ImGuiCond_Appearing);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
 		bool modalOpen = ImGui::BeginPopupModal("Retrodev Documentation", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);

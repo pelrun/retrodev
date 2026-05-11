@@ -1,12 +1,14 @@
-﻿//----------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 //
+// Retrodev Gui
 //
+// Z80 Assembler language definition and parser for TextEditor.
 //
+// (c) TLOTB 2026
 //
-//
-//----------------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 
-#include "../imgui.text.editor.h"
+#include <imgui.text.editor.h>
 #include <ctre.hpp>
 #include <cstdlib>
 #include <deque>
@@ -14,10 +16,13 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include "lang.asm.z80.h"
 
 namespace ImGui {
 	namespace TextEditorLangs {
 		namespace Z80Asm {
+			using ::RetrodevGui::Z80TimingType;
+			using ::RetrodevGui::Z80AsmLanguage;
 			//
 			// Z80 Assembler directives (code/data/assembler features)
 			// Based on RASM assembler documentation
@@ -2448,36 +2453,19 @@ namespace ImGui {
 			static const char* const kZ80ConditionCodes[] = {"C", "NC", "Z", "NZ", "M", "P", "PE", "PO", nullptr};
 			static const char* const kZ80Registers16[] = {"BC", "DE", "HL", "SP", "IX", "IY", "AF", "AF'", nullptr};
 			static const char* const kZ80Registers8[] = {"A", "B", "C", "D", "E", "H", "L", "I", "R", "IXL", "IXH", "IYL", "IYH", "XH", "XL", "YH", "YL", nullptr};
-			static std::deque<std::pair<int, std::string>> gCodeLensRecentLines;
-			static bool gCodeLensInsideMacro = false;
-			static std::string gCodeLensMacroName;
-			static int gCodeLensMacroStartLine = -1;
-			static int gCodeLensMacroCommentStartLine = -1;
-			static std::vector<std::pair<int, std::string>> gCodeLensMacroCapturedLines;
-			static std::string gCodeLensMacroTiming;
 			struct FunctionBlockState {
 				std::string name;
 				int startLine = -1;
 				std::vector<std::pair<int, std::string>> capturedLines;
 				std::string timing;
 			};
-			static const size_t kMaxOpenFunctionBlocks = 5;
-			static bool gCodeLensInsideFunction = false;
-			static std::vector<FunctionBlockState> gCodeLensFunctionBlocks;
-			static bool gCodeLensCollectErrors = false;
-			static std::string gCodeLensCurrentFilePath;
-			//
-			// Active timing mode used by both the gutter callback and the codelens parse.
-			// Synced from the language definition at the start of each parse.
-			//
-			static TextEditor::TimingType gZ80TimingType = TextEditor::TimingType::Cycles;
 			struct RepeatBlockState {
 				std::string keyword;
 				int startLine = -1;
 				int repeatCount = 0;
 				std::string timing;
+				int blockId = -1;
 			};
-			static std::vector<RepeatBlockState> gCodeLensRepeatBlocks;
 			struct Z80InstructionAliasRule {
 				const char* fromInstruction;
 				const char* toInstruction;
@@ -2656,7 +2644,6 @@ namespace ImGui {
 				return set.count(token) != 0;
 			}
 			static bool IsDirective(const std::string& text);
-			static void InjectDirectiveSymbols();
 			//
 			// Initializes all lookup tables — called once from the language definition constructor
 			//
@@ -2677,11 +2664,19 @@ namespace ImGui {
 					sAliasMap[rule.fromInstruction] = rule.toInstruction;
 				for (const auto& entry : kZ80InstructionSet)
 					sInstructionMap[entry.instruction] = &entry;
-				static const char* const kZ80DefinitionDirectives[] = {"EQU", "DEFC", "DEFB", "DEFD", "DEFL", "DEFM", "DEFS", "DEFW",
-																	   "DB",  "DD",	  "DL",	  "DM",	  "DS",	  "DW",	  "BYTE", nullptr};
+				static const char* const kZ80DefinitionDirectives[] = {
+					"EQU", "DEFC", "DEFB", "DEFD", "DEFL", "DEFM", "DEFS", "DEFW",
+					"DB",  "DD",   "DL",   "DM",   "DS",   "DW",   "BYTE",
+					"INCBIN",  "INCLUDE",  "INSERT",
+					"INCAPU",  "INCEXO",   "INCL",    "INCL48",  "INCL49",
+					"INCLZ4",  "INCLZSA1", "INCLZSA2","INCSNA",
+					"INCZX0",  "INCZX0B",  "INCZX7",
+					"LZ4",     "LZ48",     "LZ49",    "LZ7",
+					"LZAPU",   "LZEXO",    "LZX0",    "LZX7",    "LZSA1",  "LZSA2",
+					"ZX0",     "ZX7",
+					nullptr};
 				for (size_t i = 0; kZ80DefinitionDirectives[i] != nullptr; i++)
 					sDefinitionDirectivesSet.insert(kZ80DefinitionDirectives[i]);
-				InjectDirectiveSymbols();
 			}
 			//
 			// Convert string to uppercase
@@ -2781,6 +2776,8 @@ namespace ImGui {
 				if (param[0] == '{') {
 					if (IsInSet(prevParam, sRegisters16Set))
 						return "nn";
+					if (prevParam == "(C)")
+						return "A";
 					return "n";
 				}
 				if (IsInSet(param, sRegisters16Set))
@@ -2909,19 +2906,6 @@ namespace ImGui {
 					return 0;
 				return (int)value;
 			}
-			static bool TryParseIntStrict(const std::string& text, int& outValue) {
-				const char* begin = text.c_str();
-				char* end = nullptr;
-				long value = std::strtol(begin, &end, 10);
-				if (end == begin)
-					return false;
-				while (*end == ' ' || *end == '\t')
-					end++;
-				if (*end != '\0')
-					return false;
-				outValue = (int)value;
-				return true;
-			}
 			//
 			// Multiply a timing expression by repeat count (supports "a" and "a/b").
 			//
@@ -3031,24 +3015,7 @@ namespace ImGui {
 			// Returns true when line is empty or comment-only.
 			//
 			static bool IsEmptyOrCommentLine(const std::string& lineText) {
-				size_t i = 0;
-				while (i < lineText.size() && (lineText[i] == ' ' || lineText[i] == '\t'))
-					i++;
-				return i >= lineText.size() || lineText[i] == ';';
-			}
-			//
-			// Finds contiguous comment block immediately above current line in recent history.
-			//
-			static int FindLeadingCommentStartLineInRecent() {
-				if (gCodeLensRecentLines.empty())
-					return -1;
-				int index = (int)gCodeLensRecentLines.size() - 2;
-				while (index >= 0 && IsCommentLine(gCodeLensRecentLines[index].second))
-					index--;
-				index++;
-				if (index >= 0 && index < (int)gCodeLensRecentLines.size() - 1 && IsCommentLine(gCodeLensRecentLines[index].second))
-					return gCodeLensRecentLines[index].first;
-				return -1;
+				return ctre::match<R"(\s*(;.*)?)">( lineText).operator bool();
 			}
 			//
 			// Tokenizes a line using the same language tokenizers used by highlighting.
@@ -3102,84 +3069,90 @@ namespace ImGui {
 			//
 			// Parses tokens to detect macro end directives.
 			//
-			static bool IsMacroEndLine(const std::vector<std::string>& tokens) {
-				for (size_t i = 0; i < tokens.size(); i++) {
-					if (tokens[i] == "ENDM" || tokens[i] == "ENDMACRO" || tokens[i] == "MEND")
-						return true;
-				}
-				return false;
+			static bool IsMacroEndLine(const std::string& lineText) {
+				return ctre::search<R"((?i)(?:^|\s|:)(ENDM|ENDMACRO|MEND)(?:\s|;|$))">(
+					std::string_view(lineText)).operator bool();
 			}
 			//
 			// Parses line text to detect a global function start label (identifier or identifier:).
 			//
-			static bool TryParseFunctionStart(const std::string& lineText, std::string& outFunctionName) {
-				std::string code = lineText;
-				size_t commentPos = code.find(';');
-				if (commentPos != std::string::npos)
-					code = code.substr(0, commentPos);
-				code = Trim(code);
-				if (code.empty())
+			//
+			// outNeedsLookahead=true: bare label with nothing after it; caller must
+			// defer the function-open decision until the next non-empty line is seen,
+			// then discard if that line starts with a data-definition directive.
+			// outNeedsLookahead=false: label confirmed as a function start (instruction
+			// or other non-data content follows on the same line, or inside a function).
+			//
+			static bool TryParseFunctionStart(const std::string& lineText, std::string& outFunctionName, bool& outNeedsLookahead) {
+				std::string_view sv(lineText);
+				auto semiPos = sv.find(';');
+				if (semiPos != std::string_view::npos)
+					sv = sv.substr(0, semiPos);
+				auto m = ctre::search<R"(^[a-zA-Z_.@][a-zA-Z0-9_.@?]*)">(sv);
+				if (!m)
 					return false;
-				size_t i = 0;
-				if (!((code[i] >= 'a' && code[i] <= 'z') || (code[i] >= 'A' && code[i] <= 'Z') || code[i] == '_' || code[i] == '.' || code[i] == '@'))
-					return false;
-				while (i < code.length() && ((code[i] >= 'a' && code[i] <= 'z') || (code[i] >= 'A' && code[i] <= 'Z') || (code[i] >= '0' && code[i] <= '9') || code[i] == '_' ||
-											 code[i] == '.' || code[i] == '@' || code[i] == '?'))
-					i++;
-				if (i == 0)
-					return false;
-				std::string candidate = ToUpper(code.substr(0, i));
-				if (candidate == "MACRO" || candidate == "MEND" || candidate == "ENDM" || candidate == "ENDMACRO" || candidate == "REPEAT" || candidate == "REPT")
+				std::string candidate = ToUpper(std::string(m.get<0>().to_view()));
+				if (candidate.empty())
 					return false;
 				if (candidate[0] == '.' || candidate[0] == '@')
 					return false;
 				if (IsInSet(candidate, sDirectiveSet) || IsValidMnemonic(candidate))
 					return false;
-				while (i < code.length() && (code[i] == ' ' || code[i] == '\t'))
-					i++;
-				if (i < code.length() && code[i] != ':')
+				if (candidate == "MACRO" || candidate == "MEND" || candidate == "ENDM" ||
+					candidate == "ENDMACRO" || candidate == "REPEAT" || candidate == "REPT")
 					return false;
+				// Examine what follows the identifier
+				size_t pos = m.get<0>().to_view().size();
+				while (pos < sv.size() && (sv[pos] == ' ' || sv[pos] == '\t'))
+					pos++;
+				if (pos < sv.size() && sv[pos] == ':')
+					pos++;
+				while (pos < sv.size() && (sv[pos] == ' ' || sv[pos] == '\t'))
+					pos++;
+				if (pos >= sv.size()) {
+					// Nothing after the label — bare label, defer decision
+					outFunctionName = candidate;
+					outNeedsLookahead = true;
+					return true;
+				}
+				// Something follows. Extract the first token.
+				size_t tokStart = pos;
+				while (pos < sv.size() && sv[pos] != ' ' && sv[pos] != '\t' && sv[pos] != ',' && sv[pos] != ';')
+					pos++;
+				std::string nextToken = ToUpper(std::string(sv.substr(tokStart, pos - tokStart)));
+				if (IsInSet(nextToken, sDefinitionDirectivesSet) || IsInSet(nextToken, sDirectiveSet))
+					return false;  // data or assembler directive on the same line — not a function
+				// Instruction (or macro call) after label — confirmed function start
 				outFunctionName = candidate;
+				outNeedsLookahead = false;
 				return true;
 			}
 			//
 			// Detects function end when a return instruction appears.
 			//
 			static bool ContainsFunctionReturn(const std::string& lineText) {
-				std::vector<std::string> instructions = ExtractInstructions(lineText);
-				for (size_t i = 0; i < instructions.size(); i++) {
-					std::string mnemonic = ExtractMnemonic(instructions[i]);
-					if (mnemonic == "RET" || mnemonic == "RETI" || mnemonic == "RETN")
-						return true;
-				}
-				return false;
+				return ctre::search<R"((?i)(?:^|[\s:])RET(?:I|N)?(?:[\s;:]|$))">(
+					std::string_view(lineText)).operator bool();
 			}
 			//
 			// Parses line text to detect repeat block start (REPEAT/REPT n).
 			//
 			static bool TryParseRepeatStart(const std::string& lineText, std::string& outKeyword, int& outCount) {
-				std::string upper = ToUpper(lineText);
-				size_t commentPos = upper.find(';');
-				if (commentPos != std::string::npos)
-					upper = upper.substr(0, commentPos);
-				std::vector<std::string> parts = Split(upper, ' ');
-				if (parts.size() < 2)
-					return false;
-				if (parts[0] != "REPEAT" && parts[0] != "REPT")
-					return false;
-				if (!TryParseIntStrict(parts[1], outCount))
-					return false;
-				outKeyword = parts[0];
-				return true;
+				if (auto m = ctre::search<R"((?i)(?:^|\s|:)(REPEAT|REPT)\s+(\d+))">(std::string_view(lineText))) {
+					outKeyword = ToUpper(std::string(m.get<1>().to_view()));
+					outCount = 0;
+					for (char c : m.get<2>().to_view())
+						outCount = outCount * 10 + (c - '0');
+					return true;
+				}
+				return false;
 			}
 			//
 			// Detects repeat block end token (ENDREPEAT/ENDREPT).
 			//
-			static bool IsRepeatEndLine(const std::vector<std::string>& tokens) {
-				for (size_t i = 0; i < tokens.size(); i++)
-					if (tokens[i] == "ENDREPEAT" || tokens[i] == "ENDREPT" || tokens[i] == "REND")
-						return true;
-				return false;
+			static bool IsRepeatEndLine(const std::string& lineText) {
+				return ctre::search<R"((?i)(?:^|\s|:)(ENDREPEAT|ENDREPT|REND)(?:\s|;|$))">(
+					std::string_view(lineText)).operator bool();
 			}
 			//
 			// Parses tokens to detect symbol definition lines (identifier + data/constant directive).
@@ -3197,294 +3170,342 @@ namespace ImGui {
 			//
 			// Returns the appropriate timing string for a given instruction entry and timing mode.
 			//
-			static const char* GetTimingForEntry(const Z80Instruction* entry, TextEditor::TimingType timingType) {
+			static const char* GetTimingForEntry(const Z80Instruction* entry, Z80TimingType timingType) {
 				switch (timingType) {
-					case TextEditor::TimingType::CyclesM1:
+					case Z80TimingType::CyclesM1:
 						return entry->timingZ80M1;
-					case TextEditor::TimingType::Instructions:
+					case Z80TimingType::Instructions:
 						return entry->timingCPC;
 					default:
 						return entry->timingZ80;
 				}
 			}
+
 			//
-			// Callback for fetching timing information for a line
+			// Z80AsmParser - stateful per-parse-job implementation.
+			// One instance per parse job; owns all parse state as instance members.
 			//
-			static std::string GetZ80Timing(int lineNumber, const std::string& lineText, void* userData) {
-				TextEditor::TimingType timingType = (userData != nullptr) ? *static_cast<const TextEditor::TimingType*>(userData) : gZ80TimingType;
-				std::vector<std::string> instructions = ExtractInstructions(lineText);
-				if (instructions.empty())
-					return "";
-				std::string totalTiming;
-				bool hasInvalidInstruction = false;
-				for (const auto& instruction : instructions) {
-					std::string mnemonic = ExtractMnemonic(instruction);
-					if (!IsValidMnemonic(mnemonic))
-						continue;
-					std::string normalized = NormalizeInstruction(instruction);
-					const Z80Instruction* entry = FindInstructionEntry(normalized);
-					if (!entry) {
-						hasInvalidInstruction = true;
-						continue;
+			class Z80AsmParser : public ILanguageParser {
+			public:
+				Z80AsmParser(TextEditorMI* host, const Z80AsmLanguage* langDef)
+					: mHost(host), mLangDef(langDef) {}
+
+				void ParseStart(const std::string& filePath) override {
+					mCollectErrors = true;
+					mCurrentFilePath = filePath;
+					InjectDirectiveSymbols();
+					mRecentLines.clear();
+					mInsideMacro = false;
+					mMacroName.clear();
+					mMacroStartLine = -1;
+					mMacroCommentStartLine = -1;
+					mMacroCapturedLines.clear();
+					mMacroTiming.clear();
+					mMacroBlockId = -1;
+					mMacroTracker = mHost->AllocateBlockTracker();
+					mInsideFunction = false;
+					mFunctionBlocks.clear();
+					mPendingFunctionName.clear();
+					mPendingFunctionLine = -1;
+					mPendingFunctionCommentLine = -1;
+					mRepeatBlocks.clear();
+					mRepeatTracker = mHost->AllocateBlockTracker();
+				}
+
+				void ParseLine(int lineNumber, const std::string& filePath, const std::string& lineText) override {
+					mRecentLines.push_back(std::make_pair(lineNumber, lineText));
+					if (mRecentLines.size() > 20)
+						mRecentLines.pop_front();
+					std::vector<std::string> tokens = ExtractIdentifierTokens(lineText);
+					if (!mInsideMacro) {
+						std::string macroName;
+						if (TryParseMacroStart(tokens, macroName)) {
+							macroName = NormalizeZ80SymbolName(macroName);
+							macroName = ToUpper(macroName);
+							mHost->DeleteCodeLensSymbol("*", macroName);
+							mInsideFunction = false;
+							mFunctionBlocks.clear();
+							mInsideMacro = true;
+							mMacroName = macroName;
+							mMacroStartLine = lineNumber;
+							mMacroCommentStartLine = FindLeadingCommentStartLineInRecent();
+							mMacroCapturedLines.clear();
+							mMacroTiming.clear();
+							mMacroBlockId = mHost->OpenBlock(mMacroTracker, lineNumber, 0, "MACRO");
+							if (mMacroCommentStartLine >= 0) {
+								for (size_t i = 0; i < mRecentLines.size(); i++)
+									if (mRecentLines[i].first >= mMacroCommentStartLine)
+										mMacroCapturedLines.push_back(mRecentLines[i]);
+							} else
+								mMacroCapturedLines.push_back(std::make_pair(lineNumber, lineText));
+						}
 					}
-					totalTiming = SumTiming(totalTiming, GetTimingForEntry(entry, timingType));
-				}
-				if (hasInvalidInstruction && gCodeLensCollectErrors && !gCodeLensCurrentFilePath.empty() && lineNumber >= 0)
-					TextEditor::AddCodeLensError(gCodeLensCurrentFilePath, lineNumber, "Invalid instruction");
-				return totalTiming;
-			}
-			//
-			// Callback for fetching bytecode (opcode) information for a line
-			//
-			static std::string GetZ80Bytecode(int lineNumber, const std::string& lineText, void* userData) {
-				std::vector<std::string> instructions = ExtractInstructions(lineText);
-				if (instructions.empty())
-					return "";
-				std::string opcodes;
-				for (const auto& instruction : instructions) {
-					std::string normalized = NormalizeInstruction(instruction);
-					const Z80Instruction* entry = FindInstructionEntry(normalized);
-					if (!entry)
-						continue;
-					if (!opcodes.empty())
-						opcodes += " ";
-					opcodes += entry->opcode;
-				}
-				return opcodes;
-			}
-			//
-			//
-			// Injects all built-in RASM directive definitions as static codelens entries.
-			// Registered under a synthetic file key so they persist across file changes and provide
-			// autocomplete suggestions and hover documentation in all Z80 assembly files.
-			// Re-injects whenever the synthetic file has been wiped (e.g. by ClearCodeLensData).
-			//
-			static void InjectDirectiveSymbols() {
-				const auto& files = TextEditor::GetCodeLensFiles();
-				for (size_t i = 0; i < files.size(); i++)
-					if (files[i].filePath == "<z80asm-directives>" && !files[i].symbols.empty())
+					std::string repeatKeyword;
+					int repeatCount = 0;
+					bool isRepeatStart = TryParseRepeatStart(lineText, repeatKeyword, repeatCount);
+					bool isRepeatEnd = IsRepeatEndLine(lineText);
+					if (isRepeatStart) {
+						RepeatBlockState block;
+						block.keyword = repeatKeyword;
+						block.startLine = lineNumber;
+						block.repeatCount = repeatCount;
+						mRepeatBlocks.push_back(block);
+						mRepeatBlocks.back().blockId = mHost->OpenBlock(mRepeatTracker, lineNumber, 0, "REPEAT");
+					}
+					if (!isRepeatStart && !isRepeatEnd && !mRepeatBlocks.empty() && !IsEmptyOrCommentLine(lineText)) {
+						std::string timing = ComputeLineTiming(lineNumber, lineText, false);
+						if (timing.empty())
+							timing = ResolveMacroTiming(tokens);
+						mRepeatBlocks.back().timing = SumTiming(mRepeatBlocks.back().timing, timing);
+					}
+					if (isRepeatEnd && !mRepeatBlocks.empty()) {
+						RepeatBlockState block = mRepeatBlocks.back();
+						mRepeatBlocks.pop_back();
+						if (block.blockId >= 0)
+							mHost->CloseBlock(mRepeatTracker, block.blockId);
+						std::string totalTiming = MultiplyTiming(block.timing, block.repeatCount);
+						CodeLensSymbolData repeatSymbol;
+						repeatSymbol.symbolName = BuildRepeatCodeLensSymbolName(filePath, block.startLine);
+						repeatSymbol.lineNumber = block.startLine;
+						repeatSymbol.timings = totalTiming;
+						repeatSymbol.opcodes = "";
+						repeatSymbol.codelensText = std::string("repeat timing: ") + (totalTiming.empty() ? "n/a" : totalTiming);
+						repeatSymbol.externalCode = "";
+						mHost->AddCodeLensSymbol(filePath, repeatSymbol);
+						if (!mRepeatBlocks.empty())
+							mRepeatBlocks.back().timing = SumTiming(mRepeatBlocks.back().timing, totalTiming);
+						else if (mInsideFunction) {
+							for (size_t fi = 0; fi < mFunctionBlocks.size(); fi++)
+								mFunctionBlocks[fi].timing = SumTiming(mFunctionBlocks[fi].timing, totalTiming);
+						}
+					}
+					bool isSymbolDefinition = false;
+					if (!mInsideMacro) {
+						std::string symbolName;
+						if (TryParseSymbolDefinition(tokens, symbolName)) {
+							symbolName = ToUpper(NormalizeZ80SymbolName(symbolName));
+							isSymbolDefinition = true;
+							CodeLensSymbolData symbol;
+							symbol.symbolName = symbolName;
+							symbol.lineNumber = lineNumber;
+							symbol.codelensText = "";
+							symbol.kind = CodeLensSymbolKind::UserDefined;
+							int commentStartLine = FindLeadingCommentStartLineInRecent();
+							std::string external;
+							if (commentStartLine >= 0) {
+								for (size_t i = 0; i < mRecentLines.size(); i++)
+									if (mRecentLines[i].first >= commentStartLine) {
+										if (!external.empty())
+											external += "\n";
+										external += mRecentLines[i].second;
+									}
+							} else
+								external = lineText;
+							symbol.externalCode = external;
+							mHost->DeleteCodeLensSymbol("*", symbolName);
+							mHost->AddCodeLensSymbol(filePath, symbol);
+						}
+					}
+					if (!mInsideMacro && !mInsideFunction) {
+						// Resolve pending bare label: next non-empty line decides function vs data.
+						if (!mPendingFunctionName.empty() && !IsEmptyOrCommentLine(lineText)) {
+							if (!tokens.empty() && (IsInSet(tokens[0], sDefinitionDirectivesSet) || IsInSet(tokens[0], sDirectiveSet))) {
+								// Data or assembler directive follows — register pending label as resource symbol
+								{
+									CodeLensSymbolData dataLabel;
+									dataLabel.symbolName = mPendingFunctionName;
+									dataLabel.lineNumber = mPendingFunctionLine;
+									dataLabel.codelensText = "";
+									dataLabel.kind = CodeLensSymbolKind::UserDefined;
+									std::string external;
+									int startLine = (mPendingFunctionCommentLine >= 0) ? mPendingFunctionCommentLine : mPendingFunctionLine;
+									for (size_t i = 0; i < mRecentLines.size(); i++) {
+										if (mRecentLines[i].first >= startLine) {
+											if (!external.empty())
+												external += "\n";
+											external += mRecentLines[i].second;
+										}
+									}
+									dataLabel.externalCode = external;
+									mHost->DeleteCodeLensSymbol("*", mPendingFunctionName);
+									mHost->AddCodeLensSymbol(filePath, dataLabel);
+								}
+								mPendingFunctionName.clear();
+								mPendingFunctionLine = -1;
+								mPendingFunctionCommentLine = -1;
+							} else {
+								// Code follows — activate pending label as function start
+								if (mFunctionBlocks.size() < kMaxOpenFunctionBlocks) {
+									FunctionBlockState block;
+									block.name = mPendingFunctionName;
+									block.startLine = mPendingFunctionLine;
+									mInsideFunction = true;
+									if (mPendingFunctionCommentLine >= 0) {
+										for (size_t i = 0; i < mRecentLines.size(); i++)
+											if (mRecentLines[i].first >= mPendingFunctionCommentLine)
+												block.capturedLines.push_back(mRecentLines[i]);
+									} else {
+										for (size_t i = 0; i < mRecentLines.size(); i++)
+											if (mRecentLines[i].first == mPendingFunctionLine) {
+												block.capturedLines.push_back(mRecentLines[i]);
+												break;
+											}
+									}
+									mFunctionBlocks.push_back(block);
+								}
+								mPendingFunctionName.clear();
+								mPendingFunctionLine = -1;
+								mPendingFunctionCommentLine = -1;
+							}
+						}
+						if (!mInsideFunction && !isSymbolDefinition && mRepeatBlocks.empty()) {
+							std::string functionName;
+							bool needsLookahead = false;
+							if (TryParseFunctionStart(lineText, functionName, needsLookahead)) {
+								functionName = ToUpper(NormalizeZ80SymbolName(functionName));
+								if (needsLookahead) {
+									mPendingFunctionName = functionName;
+									mPendingFunctionLine = lineNumber;
+									mPendingFunctionCommentLine = FindLeadingCommentStartLineInRecent();
+								} else if (mFunctionBlocks.size() < kMaxOpenFunctionBlocks) {
+									FunctionBlockState block;
+									block.name = functionName;
+									block.startLine = lineNumber;
+									mInsideFunction = true;
+									int functionCommentStartLine = FindLeadingCommentStartLineInRecent();
+									if (functionCommentStartLine >= 0) {
+										for (size_t i = 0; i < mRecentLines.size(); i++)
+											if (mRecentLines[i].first >= functionCommentStartLine)
+												block.capturedLines.push_back(mRecentLines[i]);
+									} else
+										block.capturedLines.push_back(std::make_pair(lineNumber, lineText));
+									mFunctionBlocks.push_back(block);
+								}
+							}
+						}
+						if (mCollectErrors && !mCurrentFilePath.empty() && !IsEmptyOrCommentLine(lineText)) {
+							std::vector<std::string> instructions = ExtractInstructions(lineText);
+							bool hasKnownMnemonic = false;
+							for (size_t i = 0; i < instructions.size(); i++) {
+								if (IsValidMnemonic(ExtractMnemonic(instructions[i]))) {
+									hasKnownMnemonic = true;
+									break;
+								}
+							}
+							if (hasKnownMnemonic)
+								ComputeLineTiming(lineNumber, lineText, true);
+						}
 						return;
-				const std::string apiFile = "<z80asm-directives>";
-				TextEditor::AddCodeLensFile(apiFile);
-				TextEditor::SetCodeLensFileLanguage(apiFile, TextEditor::LanguageDefinitionId::Z80Asm);
-				auto addSym = [&](const DirectiveDef& def) {
-					TextEditor::CodeLensSymbolData sym;
-					sym.symbolName = def.name;
-					sym.lineNumber = -1;
-					sym.codelensText = "";
-					sym.externalCode = std::string(def.syntax) + "\n\n" + def.description;
-					TextEditor::AddCodeLensSymbolIfNew(apiFile, sym);
-				};
-				for (size_t i = 0; i < sizeof(kZ80AssemblerDirectiveDefs) / sizeof(kZ80AssemblerDirectiveDefs[0]); i++)
-					addSym(kZ80AssemblerDirectiveDefs[i]);
-				for (size_t i = 0; i < sizeof(kZ80PreprocessorDirectiveDefs) / sizeof(kZ80PreprocessorDirectiveDefs[0]); i++)
-					addSym(kZ80PreprocessorDirectiveDefs[i]);
-			}
-			//
-			// Codelens parsing start hook for Z80.
-			//
-			static void ParseCodeLensStart(const std::string& filePath, void* userData) {
-				gZ80TimingType = (userData != nullptr) ? *static_cast<const TextEditor::TimingType*>(userData) : TextEditor::TimingType::Cycles;
-				gCodeLensCollectErrors = true;
-				gCodeLensCurrentFilePath = filePath;
-				InjectDirectiveSymbols();
-				gCodeLensRecentLines.clear();
-				gCodeLensInsideMacro = false;
-				gCodeLensMacroName.clear();
-				gCodeLensMacroStartLine = -1;
-				gCodeLensMacroCommentStartLine = -1;
-				gCodeLensMacroCapturedLines.clear();
-				gCodeLensMacroTiming.clear();
-				gCodeLensInsideFunction = false;
-				gCodeLensFunctionBlocks.clear();
-				gCodeLensRepeatBlocks.clear();
-			}
-			//
-			// Per-line codelens parser entry for Z80.
-			// Maintains a rolling buffer of the last 20 lines.
-			//
-			static void ParseCodeLensLine(int lineNumber, const std::string& filePath, const std::string& lineText) {
-				gCodeLensRecentLines.push_back(std::make_pair(lineNumber, lineText));
-				if (gCodeLensRecentLines.size() > 20)
-					gCodeLensRecentLines.pop_front();
-				std::vector<std::string> tokens = ExtractIdentifierTokens(lineText);
-				if (!gCodeLensInsideMacro) {
-					std::string macroName;
-					if (TryParseMacroStart(tokens, macroName)) {
-						macroName = NormalizeZ80SymbolName(macroName);
-						macroName = ToUpper(macroName);
-						TextEditor::DeleteCodeLensSymbol("*", macroName);
-						gCodeLensInsideFunction = false;
-						gCodeLensFunctionBlocks.clear();
-						gCodeLensInsideMacro = true;
-						gCodeLensMacroName = macroName;
-						gCodeLensMacroStartLine = lineNumber;
-						gCodeLensMacroCommentStartLine = FindLeadingCommentStartLineInRecent();
-						gCodeLensMacroCapturedLines.clear();
-						gCodeLensMacroTiming.clear();
-						if (gCodeLensMacroCommentStartLine >= 0) {
-							for (size_t i = 0; i < gCodeLensRecentLines.size(); i++)
-								if (gCodeLensRecentLines[i].first >= gCodeLensMacroCommentStartLine)
-									gCodeLensMacroCapturedLines.push_back(gCodeLensRecentLines[i]);
-						} else
-							gCodeLensMacroCapturedLines.push_back(std::make_pair(lineNumber, lineText));
 					}
-				}
-				std::string repeatKeyword;
-				int repeatCount = 0;
-				bool isRepeatStart = TryParseRepeatStart(lineText, repeatKeyword, repeatCount);
-				bool isRepeatEnd = IsRepeatEndLine(tokens);
-				if (isRepeatStart) {
-					RepeatBlockState block;
-					block.keyword = repeatKeyword;
-					block.startLine = lineNumber;
-					block.repeatCount = repeatCount;
-					gCodeLensRepeatBlocks.push_back(block);
-				}
-				if (!isRepeatStart && !isRepeatEnd && !gCodeLensRepeatBlocks.empty() && !IsEmptyOrCommentLine(lineText)) {
-					std::string timing = GetZ80Timing(lineNumber, lineText, nullptr);
-					gCodeLensRepeatBlocks.back().timing = SumTiming(gCodeLensRepeatBlocks.back().timing, timing);
-				}
-				if (isRepeatEnd && !gCodeLensRepeatBlocks.empty()) {
-					RepeatBlockState block = gCodeLensRepeatBlocks.back();
-					gCodeLensRepeatBlocks.pop_back();
-					std::string totalTiming = MultiplyTiming(block.timing, block.repeatCount);
-					TextEditor::CodeLensSymbolData repeatSymbol;
-					repeatSymbol.symbolName = BuildRepeatCodeLensSymbolName(filePath, block.startLine);
-					repeatSymbol.lineNumber = block.startLine;
-					repeatSymbol.timings = totalTiming;
-					repeatSymbol.opcodes = "";
-					repeatSymbol.codelensText = std::string("repeat timing: ") + (totalTiming.empty() ? "n/a" : totalTiming);
-					repeatSymbol.externalCode = "";
-					TextEditor::AddOrUpdateCodeLensSymbol(filePath, repeatSymbol);
-					if (!gCodeLensRepeatBlocks.empty()) {
-						gCodeLensRepeatBlocks.back().timing = SumTiming(gCodeLensRepeatBlocks.back().timing, totalTiming);
+					if (mInsideMacro) {
+						if (!(mMacroCapturedLines.size() == 1 && mMacroCapturedLines[0].first == lineNumber))
+							mMacroCapturedLines.push_back(std::make_pair(lineNumber, lineText));
+						if (!IsEmptyOrCommentLine(lineText)) {
+							std::string timing = ComputeLineTiming(lineNumber, lineText, false);
+							mMacroTiming = SumTiming(mMacroTiming, timing);
+						}
+						if (IsMacroEndLine(lineText)) {
+							CodeLensSymbolData symbol;
+							symbol.symbolName = mMacroName;
+							symbol.lineNumber = mMacroStartLine;
+							symbol.timings = mMacroTiming;
+							symbol.opcodes = "";
+							symbol.codelensText = std::string("macro timing: ") + (mMacroTiming.empty() ? "n/a" : mMacroTiming);
+							symbol.referenceDisplay = true;
+							std::string external;
+							for (size_t i = 0; i < mMacroCapturedLines.size(); i++) {
+								if (!external.empty())
+									external += "\n";
+								external += mMacroCapturedLines[i].second;
+							}
+							symbol.externalCode = external;
+							mHost->DeleteCodeLensSymbol("*", mMacroName);
+							mHost->AddCodeLensSymbol(filePath, symbol);
+							if (mMacroBlockId >= 0)
+								mHost->CloseBlock(mMacroTracker, mMacroBlockId);
+							mInsideMacro = false;
+							mMacroName.clear();
+							mMacroStartLine = -1;
+							mMacroCommentStartLine = -1;
+							mMacroCapturedLines.clear();
+							mMacroTiming.clear();
+							mMacroBlockId = -1;
+						}
+						return;
 					}
-				}
-				bool isSymbolDefinition = false;
-				if (!gCodeLensInsideMacro) {
-					std::string symbolName;
-					if (TryParseSymbolDefinition(tokens, symbolName)) {
-						symbolName = ToUpper(NormalizeZ80SymbolName(symbolName));
-						isSymbolDefinition = true;
-						TextEditor::CodeLensSymbolData symbol;
-						symbol.symbolName = symbolName;
-						symbol.lineNumber = lineNumber;
-						symbol.codelensText = "";
-						int commentStartLine = FindLeadingCommentStartLineInRecent();
-						std::string external;
-						if (commentStartLine >= 0) {
-							for (size_t i = 0; i < gCodeLensRecentLines.size(); i++)
-								if (gCodeLensRecentLines[i].first >= commentStartLine) {
+					if (mInsideFunction) {
+						std::string nestedFunctionName;
+						bool nestedNeedsLookahead = false;
+						if (TryParseFunctionStart(lineText, nestedFunctionName, nestedNeedsLookahead)) {
+							nestedFunctionName = ToUpper(NormalizeZ80SymbolName(nestedFunctionName));
+							if (mFunctionBlocks.size() < kMaxOpenFunctionBlocks) {
+								FunctionBlockState nestedBlock;
+								nestedBlock.name = nestedFunctionName;
+								nestedBlock.startLine = lineNumber;
+								int nestedCommentStartLine = FindLeadingCommentStartLineInRecent();
+								if (nestedCommentStartLine >= 0) {
+									for (size_t i = 0; i < mRecentLines.size(); i++)
+										if (mRecentLines[i].first >= nestedCommentStartLine)
+											nestedBlock.capturedLines.push_back(mRecentLines[i]);
+								} else
+									nestedBlock.capturedLines.push_back(std::make_pair(lineNumber, lineText));
+								mFunctionBlocks.push_back(nestedBlock);
+							}
+						}
+						for (size_t i = 0; i < mFunctionBlocks.size(); i++) {
+							FunctionBlockState& block = mFunctionBlocks[i];
+							if (block.capturedLines.empty() || block.capturedLines.back().first != lineNumber)
+								block.capturedLines.push_back(std::make_pair(lineNumber, lineText));
+							if (!IsEmptyOrCommentLine(lineText) && mRepeatBlocks.empty()) {
+								std::string timing = ComputeLineTiming(lineNumber, lineText, false);
+								if (timing.empty())
+									timing = ResolveMacroTiming(tokens);
+								block.timing = SumTiming(block.timing, timing);
+							}
+						}
+						if (ContainsFunctionReturn(lineText)) {
+							for (size_t functionIndex = 0; functionIndex < mFunctionBlocks.size(); functionIndex++) {
+								const FunctionBlockState& block = mFunctionBlocks[functionIndex];
+								CodeLensSymbolData symbol;
+								symbol.symbolName = block.name;
+								symbol.lineNumber = block.startLine;
+								symbol.timings = block.timing;
+								symbol.opcodes = "";
+								symbol.codelensText = std::string("function timing: ") + (block.timing.empty() ? "n/a" : block.timing);
+								std::string external;
+								size_t maxLines = block.capturedLines.size();
+								if (maxLines > 10)
+									maxLines = 10;
+								for (size_t lineIndex = 0; lineIndex < maxLines; lineIndex++) {
 									if (!external.empty())
 										external += "\n";
-									external += gCodeLensRecentLines[i].second;
+									external += block.capturedLines[lineIndex].second;
 								}
-						} else
-							external = lineText;
-						symbol.externalCode = external;
-						TextEditor::DeleteCodeLensSymbol("*", symbolName);
-						TextEditor::AddOrUpdateCodeLensSymbol(filePath, symbol);
-					}
-				}
-				if (!gCodeLensInsideMacro && !gCodeLensInsideFunction) {
-					if (!gCodeLensInsideMacro && !isSymbolDefinition && gCodeLensRepeatBlocks.empty()) {
-						std::string functionName;
-						if (TryParseFunctionStart(lineText, functionName)) {
-							functionName = ToUpper(NormalizeZ80SymbolName(functionName));
-							if (gCodeLensFunctionBlocks.size() < kMaxOpenFunctionBlocks) {
-								FunctionBlockState block;
-								block.name = functionName;
-								block.startLine = lineNumber;
-								gCodeLensInsideFunction = true;
-								int functionCommentStartLine = FindLeadingCommentStartLineInRecent();
-								if (functionCommentStartLine >= 0) {
-									for (size_t i = 0; i < gCodeLensRecentLines.size(); i++)
-										if (gCodeLensRecentLines[i].first >= functionCommentStartLine)
-											block.capturedLines.push_back(gCodeLensRecentLines[i]);
-								} else
-									block.capturedLines.push_back(std::make_pair(lineNumber, lineText));
-								gCodeLensFunctionBlocks.push_back(block);
+								symbol.externalCode = external;
+								mHost->AddCodeLensSymbolIfNew(filePath, symbol);
 							}
+							mInsideFunction = false;
+							mFunctionBlocks.clear();
 						}
+						return;
 					}
-					if (gCodeLensCollectErrors && !gCodeLensCurrentFilePath.empty() && !IsEmptyOrCommentLine(lineText)) {
-						std::vector<std::string> instructions = ExtractInstructions(lineText);
-						bool hasKnownMnemonic = false;
-						for (size_t i = 0; i < instructions.size(); i++) {
-							if (IsValidMnemonic(ExtractMnemonic(instructions[i]))) {
-								hasKnownMnemonic = true;
-								break;
-							}
-						}
-						if (hasKnownMnemonic)
-							GetZ80Timing(lineNumber, lineText, nullptr);
-					}
-					return;
 				}
-				if (gCodeLensInsideMacro) {
-					if (!(gCodeLensMacroCapturedLines.size() == 1 && gCodeLensMacroCapturedLines[0].first == lineNumber))
-						gCodeLensMacroCapturedLines.push_back(std::make_pair(lineNumber, lineText));
-					if (!IsEmptyOrCommentLine(lineText)) {
-						std::string timing = GetZ80Timing(lineNumber, lineText, nullptr);
-						gCodeLensMacroTiming = SumTiming(gCodeLensMacroTiming, timing);
+
+				void ParseEnd(const std::string& filePath, const std::vector<UnclosedBlock>& unclosedBlocks) override {
+					for (size_t i = 0; i < unclosedBlocks.size(); i++) {
+						if (unclosedBlocks[i].trackerHandle == mMacroTracker)
+							mHost->AddCodeLensError(filePath, unclosedBlocks[i].line, "Macro was not closed (missing ENDM/ENDMACRO)");
+						else
+							mHost->AddCodeLensError(filePath, unclosedBlocks[i].line, "Repeat block was not closed (missing ENDREPEAT/ENDREPT/REND)");
 					}
-					if (IsMacroEndLine(tokens)) {
-						TextEditor::CodeLensSymbolData symbol;
-						symbol.symbolName = gCodeLensMacroName;
-						symbol.lineNumber = gCodeLensMacroStartLine;
-						symbol.timings = gCodeLensMacroTiming;
-						symbol.opcodes = "";
-						symbol.codelensText = std::string("macro timing: ") + (gCodeLensMacroTiming.empty() ? "n/a" : gCodeLensMacroTiming);
-						std::string external;
-						for (size_t i = 0; i < gCodeLensMacroCapturedLines.size(); i++) {
-							if (!external.empty())
-								external += "\n";
-							external += gCodeLensMacroCapturedLines[i].second;
-						}
-						symbol.externalCode = external;
-						TextEditor::DeleteCodeLensSymbol("*", gCodeLensMacroName);
-						TextEditor::AddOrUpdateCodeLensSymbol(filePath, symbol);
-						gCodeLensInsideMacro = false;
-						gCodeLensMacroName.clear();
-						gCodeLensMacroStartLine = -1;
-						gCodeLensMacroCommentStartLine = -1;
-						gCodeLensMacroCapturedLines.clear();
-						gCodeLensMacroTiming.clear();
-					}
-					return;
-				}
-				if (gCodeLensInsideFunction) {
-					std::string nestedFunctionName;
-					if (TryParseFunctionStart(lineText, nestedFunctionName)) {
-						nestedFunctionName = ToUpper(NormalizeZ80SymbolName(nestedFunctionName));
-						if (gCodeLensFunctionBlocks.size() < kMaxOpenFunctionBlocks) {
-							FunctionBlockState nestedBlock;
-							nestedBlock.name = nestedFunctionName;
-							nestedBlock.startLine = lineNumber;
-							int nestedCommentStartLine = FindLeadingCommentStartLineInRecent();
-							if (nestedCommentStartLine >= 0) {
-								for (size_t i = 0; i < gCodeLensRecentLines.size(); i++)
-									if (gCodeLensRecentLines[i].first >= nestedCommentStartLine)
-										nestedBlock.capturedLines.push_back(gCodeLensRecentLines[i]);
-							} else
-								nestedBlock.capturedLines.push_back(std::make_pair(lineNumber, lineText));
-							gCodeLensFunctionBlocks.push_back(nestedBlock);
-						}
-					}
-					for (size_t i = 0; i < gCodeLensFunctionBlocks.size(); i++) {
-						FunctionBlockState& block = gCodeLensFunctionBlocks[i];
-						if (block.capturedLines.empty() || block.capturedLines.back().first != lineNumber)
-							block.capturedLines.push_back(std::make_pair(lineNumber, lineText));
-						if (!IsEmptyOrCommentLine(lineText)) {
-							std::string timing = GetZ80Timing(lineNumber, lineText, nullptr);
-							block.timing = SumTiming(block.timing, timing);
-						}
-					}
-					if (ContainsFunctionReturn(lineText)) {
-						for (size_t functionIndex = 0; functionIndex < gCodeLensFunctionBlocks.size(); functionIndex++) {
-							const FunctionBlockState& block = gCodeLensFunctionBlocks[functionIndex];
-							TextEditor::CodeLensSymbolData symbol;
+					//
+					// Emit any function blocks still open at end of file (e.g. functions that
+					// terminate with jp instead of ret and never trigger ContainsFunctionReturn).
+					//
+					if (mInsideFunction) {
+						for (size_t functionIndex = 0; functionIndex < mFunctionBlocks.size(); functionIndex++) {
+							const FunctionBlockState& block = mFunctionBlocks[functionIndex];
+							CodeLensSymbolData symbol;
 							symbol.symbolName = block.name;
 							symbol.lineNumber = block.startLine;
 							symbol.timings = block.timing;
@@ -3500,107 +3521,242 @@ namespace ImGui {
 								external += block.capturedLines[lineIndex].second;
 							}
 							symbol.externalCode = external;
-							TextEditor::AddCodeLensSymbolIfNew(filePath, symbol);
+							mHost->AddCodeLensSymbolIfNew(filePath, symbol);
 						}
-						gCodeLensInsideFunction = false;
-						gCodeLensFunctionBlocks.clear();
 					}
-					return;
+					mCollectErrors = false;
+					mCurrentFilePath.clear();
+					mInsideMacro = false;
+					mMacroName.clear();
+					mMacroStartLine = -1;
+					mMacroCommentStartLine = -1;
+					mMacroCapturedLines.clear();
+					mMacroTiming.clear();
+					mMacroBlockId = -1;
+					mInsideFunction = false;
+					mFunctionBlocks.clear();
+					mPendingFunctionName.clear();
+					mPendingFunctionLine = -1;
+					mPendingFunctionCommentLine = -1;
+					mRepeatBlocks.clear();
 				}
-			}
-			//
-			// Codelens parsing end hook for Z80.
-			//
-			static void ParseCodeLensEnd(const std::string& filePath) {
-				if (gCodeLensInsideMacro)
-					TextEditor::AddCodeLensError(filePath, gCodeLensMacroStartLine, "Macro was not closed (missing ENDM/ENDMACRO)");
-				for (size_t i = 0; i < gCodeLensRepeatBlocks.size(); i++)
-					TextEditor::AddCodeLensError(filePath, gCodeLensRepeatBlocks[i].startLine, "Repeat block was not closed (missing ENDREPEAT/ENDREPT/REND)");
-				gCodeLensCollectErrors = false;
-				gCodeLensCurrentFilePath.clear();
-				gCodeLensInsideMacro = false;
-				gCodeLensMacroName.clear();
-				gCodeLensMacroStartLine = -1;
-				gCodeLensMacroCommentStartLine = -1;
-				gCodeLensMacroCapturedLines.clear();
-				gCodeLensMacroTiming.clear();
-				gCodeLensInsideFunction = false;
-				gCodeLensFunctionBlocks.clear();
-				gCodeLensRepeatBlocks.clear();
-			}
+
+				std::string GetLineTiming(const std::string& lineText) const override {
+					std::vector<std::string> instructions = ExtractInstructions(lineText);
+					if (instructions.empty())
+						return "";
+					Z80TimingType timingType = mLangDef->mTimingType;
+					std::string totalTiming;
+					for (const auto& instruction : instructions) {
+						std::string mnemonic = ExtractMnemonic(instruction);
+						if (!IsValidMnemonic(mnemonic))
+							continue;
+						std::string normalized = NormalizeInstruction(instruction);
+						const Z80Instruction* entry = FindInstructionEntry(normalized);
+						if (!entry)
+							continue;
+						totalTiming = SumTiming(totalTiming, GetTimingForEntry(entry, timingType));
+					}
+					return totalTiming;
+				}
+
+				std::string GetLineBytecode(const std::string& lineText) const override {
+					std::vector<std::string> instructions = ExtractInstructions(lineText);
+					if (instructions.empty())
+						return "";
+					std::string opcodes;
+					for (const auto& instruction : instructions) {
+						std::string normalized = NormalizeInstruction(instruction);
+						const Z80Instruction* entry = FindInstructionEntry(normalized);
+						if (!entry)
+							continue;
+						if (!opcodes.empty())
+							opcodes += " ";
+						opcodes += entry->opcode;
+					}
+					return opcodes;
+				}
+
+				bool SyntaxHighlight(const char* inBegin, const char* inEnd, const char*& outBegin, const char*& outEnd,
+					TextEditor::PaletteIndex& paletteIndex) const override {
+					paletteIndex = TextEditor::PaletteIndex::Max;
+					while (inBegin < inEnd && isascii(*inBegin) && isblank(*inBegin))
+						inBegin++;
+					if (inBegin == inEnd) {
+						outBegin = inEnd;
+						outEnd = inEnd;
+						paletteIndex = TextEditor::PaletteIndex::Default;
+					} else if (TokenizeZ80String(inBegin, inEnd, outBegin, outEnd))
+						paletteIndex = TextEditor::PaletteIndex::String;
+					else if (*inBegin == '$' && (inBegin + 1 == inEnd ||
+						!((inBegin[1] >= '0' && inBegin[1] <= '9') || (inBegin[1] >= 'a' && inBegin[1] <= 'f') || (inBegin[1] >= 'A' && inBegin[1] <= 'F')))) {
+						outBegin = inBegin;
+						outEnd = inBegin + 1;
+						paletteIndex = TextEditor::PaletteIndex::Identifier;
+					} else if (TokenizeZ80Number(inBegin, inEnd, outBegin, outEnd))
+						paletteIndex = TextEditor::PaletteIndex::Number;
+					else if (TokenizeZ80Identifier(inBegin, inEnd, outBegin, outEnd))
+						paletteIndex = TextEditor::PaletteIndex::Identifier;
+					else if (TokenizeZ80Punctuation(inBegin, inEnd, outBegin, outEnd))
+						paletteIndex = TextEditor::PaletteIndex::Punctuation;
+					return paletteIndex != TextEditor::PaletteIndex::Max;
+				}
+
+			private:
+				TextEditorMI* mHost;
+				const Z80AsmLanguage* mLangDef;
+				std::deque<std::pair<int, std::string>> mRecentLines;
+				bool mInsideMacro = false;
+				std::string mMacroName;
+				int mMacroStartLine = -1;
+				int mMacroCommentStartLine = -1;
+				std::vector<std::pair<int, std::string>> mMacroCapturedLines;
+				std::string mMacroTiming;
+				int mMacroTracker = -1;
+				int mMacroBlockId = -1;
+				bool mInsideFunction = false;
+				static constexpr size_t kMaxOpenFunctionBlocks = 5;
+				std::vector<FunctionBlockState> mFunctionBlocks;
+				std::string mPendingFunctionName;
+				int mPendingFunctionLine = -1;
+				int mPendingFunctionCommentLine = -1;
+				bool mCollectErrors = false;
+				std::string mCurrentFilePath;
+				std::vector<RepeatBlockState> mRepeatBlocks;
+				int mRepeatTracker = -1;
+
+				std::string FindSymbolTiming(const std::string& upperName) const {
+					const auto& files = mHost->GetCodeLensFiles();
+					for (size_t fi = 0; fi < files.size(); fi++)
+						for (size_t si = 0; si < files[fi].symbols.size(); si++)
+							if (files[fi].symbols[si].symbolName == upperName && !files[fi].symbols[si].timings.empty())
+								return files[fi].symbols[si].timings;
+					return "";
+				}
+
+				std::string ResolveMacroTiming(const std::vector<std::string>& tokens) const {
+					for (size_t ti = 0; ti < tokens.size(); ti++) {
+						const std::string& t = tokens[ti];
+						if (sInstructionMap.count(t) || sRegisters8Set.count(t) ||
+							sRegisters16Set.count(t) || sDirectiveSet.count(t))
+							continue;
+						std::string timing = FindSymbolTiming(t);
+						if (!timing.empty())
+							return timing;
+					}
+					return "";
+				}
+
+				std::string ComputeLineTiming(int lineNumber, const std::string& lineText, bool reportErrors) const {
+					Z80TimingType timingType = mLangDef->mTimingType;
+					std::vector<std::string> instructions = ExtractInstructions(lineText);
+					if (instructions.empty())
+						return "";
+					std::string totalTiming;
+					bool hasInvalidInstruction = false;
+					for (const auto& instruction : instructions) {
+						std::string mnemonic = ExtractMnemonic(instruction);
+						if (!IsValidMnemonic(mnemonic))
+							continue;
+						std::string normalized = NormalizeInstruction(instruction);
+						const Z80Instruction* entry = FindInstructionEntry(normalized);
+						if (!entry) {
+							hasInvalidInstruction = true;
+							continue;
+						}
+						totalTiming = SumTiming(totalTiming, GetTimingForEntry(entry, timingType));
+					}
+					if (hasInvalidInstruction && reportErrors && !mCurrentFilePath.empty() && lineNumber >= 0)
+						mHost->AddCodeLensError(mCurrentFilePath, lineNumber, "Invalid instruction");
+					return totalTiming;
+				}
+
+				int FindLeadingCommentStartLineInRecent() const {
+					if (mRecentLines.empty())
+						return -1;
+					int index = (int)mRecentLines.size() - 2;
+					while (index >= 0 && IsCommentLine(mRecentLines[index].second))
+						index--;
+					index++;
+					if (index >= 0 && index < (int)mRecentLines.size() - 1 && IsCommentLine(mRecentLines[index].second))
+						return mRecentLines[index].first;
+					return -1;
+				}
+
+				bool HasDirectivesInjected() const {
+					const auto& files = mHost->GetCodeLensFiles();
+					for (size_t fi = 0; fi < files.size(); fi++)
+						for (size_t si = 0; si < files[fi].symbols.size(); si++)
+							if (files[fi].symbols[si].kind == CodeLensSymbolKind::Directive)
+								return true;
+					return false;
+				}
+
+				void InjectDirectiveSymbols() {
+					if (HasDirectivesInjected())
+						return;
+					static const char* const kApiFile = "<z80asm-directives>";
+					auto addSym = [&](const DirectiveDef& def) {
+						CodeLensSymbolData sym;
+						sym.symbolName = def.name;
+						sym.lineNumber = -1;
+						sym.codelensText = "";
+						sym.externalCode = std::string(def.syntax) + "\n\n" + def.description;
+						sym.kind = CodeLensSymbolKind::Directive;
+						mHost->AddCodeLensSymbolIfNew(kApiFile, sym);
+					};
+					for (size_t i = 0; i < sizeof(kZ80AssemblerDirectiveDefs) / sizeof(kZ80AssemblerDirectiveDefs[0]); i++)
+						addSym(kZ80AssemblerDirectiveDefs[i]);
+					for (size_t i = 0; i < sizeof(kZ80PreprocessorDirectiveDefs) / sizeof(kZ80PreprocessorDirectiveDefs[0]); i++)
+						addSym(kZ80PreprocessorDirectiveDefs[i]);
+				}
+			};
 
 		} // namespace Z80Asm
 	} // namespace TextEditorLangs
-
-	const TextEditor::LanguageDefinition& TextEditor::LanguageDefinition::Z80Asm() {
-		static bool inited = false;
-		static LanguageDefinition langDef;
-		if (!inited) {
-			TextEditorLangs::Z80Asm::InitLookupTables();
-			for (auto& k : TextEditorLangs::Z80Asm::kZ80Directives)
-				langDef.mKeywords.insert(k);
-			for (auto& k : TextEditorLangs::Z80Asm::kZ80PreprocessorDirectives) {
-				Identifier id;
-				id.mDeclaration = "Z80 Preprocessor";
-				langDef.mPreprocIdentifiers.insert(std::make_pair(std::string(k), id));
-			}
-			for (size_t i = 0; TextEditorLangs::Z80Asm::kZ80Registers8[i] != nullptr; i++) {
-				const char* reg = TextEditorLangs::Z80Asm::kZ80Registers8[i];
-				Identifier id;
-				id.mDeclaration = "Z80 Register";
-				langDef.mIdentifiers.insert(std::make_pair(std::string(reg), id));
-			}
-			for (size_t i = 0; TextEditorLangs::Z80Asm::kZ80Registers16[i] != nullptr; i++) {
-				const char* reg = TextEditorLangs::Z80Asm::kZ80Registers16[i];
-				Identifier id;
-				id.mDeclaration = "Z80 Register";
-				langDef.mIdentifiers.insert(std::make_pair(std::string(reg), id));
-			}
-			for (size_t i = 0; TextEditorLangs::Z80Asm::kZ80ConditionCodes[i] != nullptr; i++) {
-				langDef.mKeywords.insert(TextEditorLangs::Z80Asm::kZ80ConditionCodes[i]);
-			}
-			for (const std::string& mnemonic : TextEditorLangs::Z80Asm::sMnemonicSet) {
-				Identifier id;
-				id.mDeclaration = "Z80 Instruction";
-				langDef.mIdentifiers.insert(std::make_pair(mnemonic, id));
-			}
-			langDef.mTokenize = &TextEditor::LanguageDefinition::TokenizeZ80Asm;
-			langDef.mCommentStart = "/*";
-			langDef.mCommentEnd = "*/";
-			langDef.mSingleLineComment = ";";
-			langDef.mCaseSensitive = false;
-			langDef.mName = "Z80 Assembly";
-			langDef.mTimingCallback = TextEditorLangs::Z80Asm::GetZ80Timing;
-			langDef.mBytecodeCallback = TextEditorLangs::Z80Asm::GetZ80Bytecode;
-			langDef.mCodeLensParseStart = TextEditorLangs::Z80Asm::ParseCodeLensStart;
-			langDef.mCodeLensLineParser = TextEditorLangs::Z80Asm::ParseCodeLensLine;
-			langDef.mCodeLensParseEnd = TextEditorLangs::Z80Asm::ParseCodeLensEnd;
-			inited = true;
-		}
-		return langDef;
-	}
-
-	bool TextEditor::LanguageDefinition::TokenizeZ80Asm(const char* in_begin, const char* in_end, const char*& out_begin, const char*& out_end, PaletteIndex& paletteIndex) {
-		paletteIndex = PaletteIndex::Max;
-		while (in_begin < in_end && isascii(*in_begin) && isblank(*in_begin))
-			in_begin++;
-		if (in_begin == in_end) {
-			out_begin = in_end;
-			out_end = in_end;
-			paletteIndex = PaletteIndex::Default;
-		} else if (TextEditorLangs::Z80Asm::TokenizeZ80String(in_begin, in_end, out_begin, out_end))
-			paletteIndex = PaletteIndex::String;
-		else if (*in_begin == '$' && (in_begin + 1 == in_end ||
-									  !((in_begin[1] >= '0' && in_begin[1] <= '9') || (in_begin[1] >= 'a' && in_begin[1] <= 'f') || (in_begin[1] >= 'A' && in_begin[1] <= 'F')))) {
-			out_begin = in_begin;
-			out_end = in_begin + 1;
-			paletteIndex = PaletteIndex::Identifier;
-		} else if (TextEditorLangs::Z80Asm::TokenizeZ80Number(in_begin, in_end, out_begin, out_end))
-			paletteIndex = PaletteIndex::Number;
-		else if (TextEditorLangs::Z80Asm::TokenizeZ80Identifier(in_begin, in_end, out_begin, out_end))
-			paletteIndex = PaletteIndex::Identifier;
-		else if (TextEditorLangs::Z80Asm::TokenizeZ80Punctuation(in_begin, in_end, out_begin, out_end))
-			paletteIndex = PaletteIndex::Punctuation;
-		return paletteIndex != PaletteIndex::Max;
-	}
 } // namespace ImGui
+
+namespace RetrodevGui {
+
+	Z80AsmLanguage::Z80AsmLanguage() {
+		ImGui::TextEditorLangs::Z80Asm::InitLookupTables();
+		for (const auto& k : ImGui::TextEditorLangs::Z80Asm::kZ80Directives)
+			mKeywords.insert(k);
+		for (const auto& k : ImGui::TextEditorLangs::Z80Asm::kZ80PreprocessorDirectives) {
+			ImGui::LangIdentifier id;
+			id.mDeclaration = "Z80 Preprocessor";
+			mPreprocIdentifiers.insert(std::make_pair(std::string(k), id));
+		}
+		for (size_t i = 0; ImGui::TextEditorLangs::Z80Asm::kZ80Registers8[i] != nullptr; i++) {
+			const char* reg = ImGui::TextEditorLangs::Z80Asm::kZ80Registers8[i];
+			ImGui::LangIdentifier id;
+			id.mDeclaration = "Z80 Register";
+			mIdentifiers.insert(std::make_pair(std::string(reg), id));
+		}
+		for (size_t i = 0; ImGui::TextEditorLangs::Z80Asm::kZ80Registers16[i] != nullptr; i++) {
+			const char* reg = ImGui::TextEditorLangs::Z80Asm::kZ80Registers16[i];
+			ImGui::LangIdentifier id;
+			id.mDeclaration = "Z80 Register";
+			mIdentifiers.insert(std::make_pair(std::string(reg), id));
+		}
+		for (size_t i = 0; ImGui::TextEditorLangs::Z80Asm::kZ80ConditionCodes[i] != nullptr; i++)
+			mKeywords.insert(ImGui::TextEditorLangs::Z80Asm::kZ80ConditionCodes[i]);
+		for (const std::string& mnemonic : ImGui::TextEditorLangs::Z80Asm::sMnemonicSet) {
+			ImGui::LangIdentifier id;
+			id.mDeclaration = "Z80 Instruction";
+			mIdentifiers.insert(std::make_pair(mnemonic, id));
+		}
+		mCommentStart = "/*";
+		mCommentEnd = "*/";
+		mSingleLineComment = ";";
+		mCaseSensitive = false;
+		mName = "Z80 Assembly";
+		mHasTimingSupport = true;
+		mHasBytecodeSupport = true;
+	}
+
+	ImGui::ILanguageParser* Z80AsmLanguage::CreateParser(ImGui::TextEditorMI* host) const {
+		return new ImGui::TextEditorLangs::Z80Asm::Z80AsmParser(host, this);
+	}
+
+}

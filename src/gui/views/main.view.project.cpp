@@ -19,6 +19,7 @@
 #include <views/build/document.build.h>
 #include <views/data/document.data.h>
 #include <views/palette/document.palette.h>
+#include <views/raster/document.raster.h>
 #include <app/app.icons.mdi.h>
 #include <app/app.console.h>
 #include <dialogs/dialog.confirm.h>
@@ -39,23 +40,15 @@ namespace RetrodevGui {
 	//
 	static std::string g_pendingScrollToBuildItem;
 	//
-	// Map source extension to text-editor language id used by codelens parsing
+	// Map source extension to language definition pointer for codelens parsing
 	//
-	static ImGui::TextEditor::LanguageDefinitionId GetCodeLensLanguageForPath(const std::filesystem::path& path) {
-		static const std::unordered_map<std::string, ImGui::TextEditor::LanguageDefinitionId> extMap = {
-			{".c", ImGui::TextEditor::LanguageDefinitionId::C},
-			{".h", ImGui::TextEditor::LanguageDefinitionId::C},
-			{".cpp", ImGui::TextEditor::LanguageDefinitionId::Cpp},
-			{".hpp", ImGui::TextEditor::LanguageDefinitionId::Cpp},
-			{".cxx", ImGui::TextEditor::LanguageDefinitionId::Cpp},
-			{".asm", ImGui::TextEditor::LanguageDefinitionId::Z80Asm},
-			{".as", ImGui::TextEditor::LanguageDefinitionId::AngelScript},
-		};
+	static const ImGui::ILanguageDefinition* GetCodeLensLanguageForPath(const std::filesystem::path& path) {
 		std::string ext = path.extension().string();
-		auto it = extMap.find(ext);
-		if (it != extMap.end())
-			return it->second;
-		return ImGui::TextEditor::LanguageDefinitionId::None;
+		if (ext == ".asm")
+			return GetZ80AsmLanguage();
+		if (ext == ".as")
+			return GetAngelScriptLanguage();
+		return nullptr;
 	}
 	//
 	// Rebuild global codelens cache from project files
@@ -72,10 +65,10 @@ namespace RetrodevGui {
 		auto enqueueStoredPaths = [](const std::vector<std::string>& storedPaths) {
 			for (const auto& storedPath : storedPaths) {
 				std::string absPath = RetrodevLib::Project::ExpandPath(storedPath);
-				ImGui::TextEditor::LanguageDefinitionId language = GetCodeLensLanguageForPath(std::filesystem::path(absPath));
-				if (language == ImGui::TextEditor::LanguageDefinitionId::None)
+				const ImGui::ILanguageDefinition* language = GetCodeLensLanguageForPath(std::filesystem::path(absPath));
+				if (language == nullptr)
 					continue;
-				ImGui::TextEditor::EnqueueCodeLensFile(absPath, language);
+				ImGui::TextEditor::EnqueueCodeLensFileStatic(absPath, language);
 			}
 		};
 		enqueueStoredPaths(RetrodevLib::Project::GetSourceFiles());
@@ -96,6 +89,11 @@ namespace RetrodevGui {
 	//
 	static bool g_showNewPaletteDialog = false;
 	static char g_newPaletteNameBuf[256] = "";
+	//
+	// New Raster dialog state
+	//
+	static bool g_showNewRasterDialog = false;
+	static char g_newRasterNameBuf[256] = "";
 	//
 	// New Virtual Folder dialog state
 	//
@@ -175,6 +173,29 @@ namespace RetrodevGui {
 			}
 		}
 		return cachedPath;
+	}
+	//
+	// Generate a unique build item name for a duplicate.
+	// Tries baseName + "_copy", then baseName + "_copy2", "_copy3", etc.
+	// existingNames must be the full flat list of all names for the relevant type.
+	//
+	static std::string GenerateUniqueCopyName(const std::string& baseName, const std::vector<std::string>& existingNames) {
+		auto exists = [&](const std::string& candidate) {
+			for (const auto& n : existingNames)
+				if (n == candidate)
+					return true;
+			return false;
+		};
+		std::string candidate = baseName + "_copy";
+		if (!exists(candidate))
+			return candidate;
+		int suffix = 2;
+		while (true) {
+			candidate = baseName + "_copy" + std::to_string(suffix);
+			if (!exists(candidate))
+				return candidate;
+			++suffix;
+		}
 	}
 	//
 	// Return the folder prefix to pre-fill when creating a new map from the given node
@@ -309,6 +330,13 @@ namespace RetrodevGui {
 					if (!prefix.empty() && prefix.size() < sizeof(g_newPaletteNameBuf))
 						memcpy(g_newPaletteNameBuf, prefix.c_str(), prefix.size());
 					g_showNewPaletteDialog = true;
+				}
+				if (ImGui::MenuItem(ICON_COSINE_WAVE " New Raster...")) {
+					std::string prefix = GetBuildPathPrefix(node);
+					memset(g_newRasterNameBuf, 0, sizeof(g_newRasterNameBuf));
+					if (!prefix.empty() && prefix.size() < sizeof(g_newRasterNameBuf))
+						memcpy(g_newRasterNameBuf, prefix.c_str(), prefix.size());
+					g_showNewRasterDialog = true;
 				}
 				//
 				// Virtual folder creation: available on the Build root and on any build-section folder
@@ -541,6 +569,112 @@ namespace RetrodevGui {
 			ImGui::EndDisabled();
 			ImGui::Separator();
 			//
+			// Duplicate build item: create a copy with a unique name and all parameters cloned
+			//
+			if (ImGui::MenuItem(ICON_CONTENT_COPY " Duplicate")) {
+				std::string srcName = node.buildItemPath.empty() ? node.name : node.buildItemPath;
+				RetrodevLib::ProjectBuildType btype = node.buildItemType;
+				std::vector<std::string> allNames = RetrodevLib::Project::GetBuildItemsByType(btype);
+				std::string copyName = GenerateUniqueCopyName(srcName, allNames);
+				bool added = false;
+				if (btype == RetrodevLib::ProjectBuildType::Bitmap) {
+					std::string src = RetrodevLib::Project::BitmapGetSourcePath(srcName);
+					added = RetrodevLib::Project::BitmapAdd(copyName, src);
+					if (added) {
+						RetrodevLib::GFXParams* srcCfg = nullptr;
+						RetrodevLib::GFXParams* dstCfg = nullptr;
+						RetrodevLib::ExportParams* srcExp = nullptr;
+						RetrodevLib::ExportParams* dstExp = nullptr;
+						if (RetrodevLib::Project::BitmapGetCfg(srcName, &srcCfg) && RetrodevLib::Project::BitmapGetCfg(copyName, &dstCfg))
+							*dstCfg = *srcCfg;
+						if (RetrodevLib::Project::BitmapGetExportParams(srcName, &srcExp) && RetrodevLib::Project::BitmapGetExportParams(copyName, &dstExp))
+							*dstExp = *srcExp;
+					}
+				} else if (btype == RetrodevLib::ProjectBuildType::Tilemap) {
+					std::string src = RetrodevLib::Project::TilesetGetSourcePath(srcName);
+					added = RetrodevLib::Project::TilesetAdd(copyName, src);
+					if (added) {
+						RetrodevLib::GFXParams* srcCfg = nullptr;
+						RetrodevLib::GFXParams* dstCfg = nullptr;
+						RetrodevLib::TileExtractionParams* srcTile = nullptr;
+						RetrodevLib::TileExtractionParams* dstTile = nullptr;
+						RetrodevLib::ExportParams* srcExp = nullptr;
+						RetrodevLib::ExportParams* dstExp = nullptr;
+						if (RetrodevLib::Project::TilesetGetCfg(srcName, &srcCfg) && RetrodevLib::Project::TilesetGetCfg(copyName, &dstCfg))
+							*dstCfg = *srcCfg;
+						if (RetrodevLib::Project::TilesetGetTileParams(srcName, &srcTile) && RetrodevLib::Project::TilesetGetTileParams(copyName, &dstTile))
+							*dstTile = *srcTile;
+						if (RetrodevLib::Project::TilesetGetExportParams(srcName, &srcExp) && RetrodevLib::Project::TilesetGetExportParams(copyName, &dstExp))
+							*dstExp = *srcExp;
+					}
+				} else if (btype == RetrodevLib::ProjectBuildType::Sprite) {
+					std::string src = RetrodevLib::Project::SpriteGetSourcePath(srcName);
+					added = RetrodevLib::Project::SpriteAdd(copyName, src);
+					if (added) {
+						RetrodevLib::GFXParams* srcCfg = nullptr;
+						RetrodevLib::GFXParams* dstCfg = nullptr;
+						RetrodevLib::SpriteExtractionParams* srcSprite = nullptr;
+						RetrodevLib::SpriteExtractionParams* dstSprite = nullptr;
+						RetrodevLib::ExportParams* srcExp = nullptr;
+						RetrodevLib::ExportParams* dstExp = nullptr;
+						if (RetrodevLib::Project::SpriteGetCfg(srcName, &srcCfg) && RetrodevLib::Project::SpriteGetCfg(copyName, &dstCfg))
+							*dstCfg = *srcCfg;
+						if (RetrodevLib::Project::SpriteGetSpriteParams(srcName, &srcSprite) && RetrodevLib::Project::SpriteGetSpriteParams(copyName, &dstSprite))
+							*dstSprite = *srcSprite;
+						if (RetrodevLib::Project::SpriteGetExportParams(srcName, &srcExp) && RetrodevLib::Project::SpriteGetExportParams(copyName, &dstExp))
+							*dstExp = *srcExp;
+					}
+				} else if (btype == RetrodevLib::ProjectBuildType::Map) {
+					added = RetrodevLib::Project::MapAdd(copyName);
+					if (added) {
+						RetrodevLib::MapParams* srcParams = nullptr;
+						RetrodevLib::MapParams* dstParams = nullptr;
+						RetrodevLib::ExportParams* srcExp = nullptr;
+						RetrodevLib::ExportParams* dstExp = nullptr;
+						if (RetrodevLib::Project::MapGetParams(srcName, &srcParams) && RetrodevLib::Project::MapGetParams(copyName, &dstParams))
+							*dstParams = *srcParams;
+						if (RetrodevLib::Project::MapGetExportParams(srcName, &srcExp) && RetrodevLib::Project::MapGetExportParams(copyName, &dstExp))
+							*dstExp = *srcExp;
+					}
+				} else if (btype == RetrodevLib::ProjectBuildType::Build) {
+					added = RetrodevLib::Project::BuildAdd(copyName);
+					if (added) {
+						RetrodevLib::SourceParams* srcParams = nullptr;
+						RetrodevLib::SourceParams* dstParams = nullptr;
+						RetrodevLib::ExportParams* srcExp = nullptr;
+						RetrodevLib::ExportParams* dstExp = nullptr;
+						if (RetrodevLib::Project::BuildGetParams(srcName, &srcParams) && RetrodevLib::Project::BuildGetParams(copyName, &dstParams))
+							*dstParams = *srcParams;
+						if (RetrodevLib::Project::BuildGetExportParams(srcName, &srcExp) && RetrodevLib::Project::BuildGetExportParams(copyName, &dstExp))
+							*dstExp = *srcExp;
+					}
+				} else if (btype == RetrodevLib::ProjectBuildType::Palette) {
+					added = RetrodevLib::Project::PaletteAdd(copyName);
+					if (added) {
+						RetrodevLib::PaletteParams* srcParams = nullptr;
+						RetrodevLib::PaletteParams* dstParams = nullptr;
+						if (RetrodevLib::Project::PaletteGetParams(srcName, &srcParams) && RetrodevLib::Project::PaletteGetParams(copyName, &dstParams))
+							*dstParams = *srcParams;
+					}
+				} else if (btype == RetrodevLib::ProjectBuildType::Raster) {
+					added = RetrodevLib::Project::RasterAdd(copyName);
+					if (added) {
+						RetrodevLib::RasterParams* srcParams = nullptr;
+						RetrodevLib::RasterParams* dstParams = nullptr;
+						if (RetrodevLib::Project::RasterGetParams(srcName, &srcParams) && RetrodevLib::Project::RasterGetParams(copyName, &dstParams))
+							*dstParams = *srcParams;
+					}
+				}
+				if (added) {
+					AppConsole::AddLogF(AppConsole::LogLevel::Info, "Duplicated build item: %s -> %s", srcName.c_str(), copyName.c_str());
+					g_forceProjectTreeRebuild = true;
+					g_pendingScrollToBuildItem = copyName;
+				} else {
+					AppConsole::AddLogF(AppConsole::LogLevel::Warning, "Failed to duplicate build item: %s", srcName.c_str());
+				}
+			}
+			ImGui::Separator();
+			//
 			// New Map shortcut: pre-fill with the same folder prefix as this item
 			//
 			if (ImGui::MenuItem(ICON_MAP " New Map...")) {
@@ -563,6 +697,13 @@ namespace RetrodevGui {
 				if (!prefix.empty() && prefix.size() < sizeof(g_newPaletteNameBuf))
 					memcpy(g_newPaletteNameBuf, prefix.c_str(), prefix.size());
 				g_showNewPaletteDialog = true;
+			}
+			if (ImGui::MenuItem(ICON_COSINE_WAVE " New Raster...")) {
+				std::string prefix = GetBuildPathPrefix(node);
+				memset(g_newRasterNameBuf, 0, sizeof(g_newRasterNameBuf));
+				if (!prefix.empty() && prefix.size() < sizeof(g_newRasterNameBuf))
+					memcpy(g_newRasterNameBuf, prefix.c_str(), prefix.size());
+				g_showNewRasterDialog = true;
 			}
 			ImGui::EndPopup();
 			return;
@@ -766,6 +907,20 @@ namespace RetrodevGui {
 	}
 
 	//
+	// Recursively sort all children of a build node alphabetically (directories first, then by name)
+	//
+	static void SortBuildNodeRecursive(FileTreeNode& node) {
+		std::sort(node.children.begin(), node.children.end(), [](const FileTreeNode& a, const FileTreeNode& b) {
+			if (a.isDirectory != b.isDirectory)
+				return a.isDirectory > b.isDirectory;
+			return a.name < b.name;
+		});
+		for (auto& child : node.children) {
+			if (child.isDirectory)
+				SortBuildNodeRecursive(child);
+		}
+	}
+	//
 	// Populate the Build node with build items from the project
 	//
 	void ProjectView::PopulateBuildNode(FileTreeNode& node) {
@@ -819,18 +974,20 @@ namespace RetrodevGui {
 			AddBuildItemToTree(node, paletteName, true, RetrodevLib::ProjectBuildType::Palette);
 		}
 		//
+		// Get all raster items
+		//
+		std::vector<std::string> rasters = RetrodevLib::Project::GetBuildItemsByType(RetrodevLib::ProjectBuildType::Raster);
+		for (const auto& rasterName : rasters) {
+			AddBuildItemToTree(node, rasterName, true, RetrodevLib::ProjectBuildType::Raster);
+		}
+		//
 		// Mark directory nodes that correspond to explicitly-created virtual folders
 		//
 		MarkVirtualFolders(node, folders);
 		//
-		// Sort children alphabetically
+		// Sort all nodes in the build tree recursively (alphabetically, directories first)
 		//
-		std::sort(node.children.begin(), node.children.end(), [](const FileTreeNode& a, const FileTreeNode& b) {
-			if (a.isDirectory != b.isDirectory) {
-				return a.isDirectory > b.isDirectory;
-			}
-			return a.name < b.name;
-		});
+		SortBuildNodeRecursive(node);
 	}
 
 	//
@@ -975,6 +1132,8 @@ namespace RetrodevGui {
 				icon = ICON_HAMMER;
 			else if (node.buildItemType == RetrodevLib::ProjectBuildType::Palette)
 				icon = ICON_PALETTE;
+			else if (node.buildItemType == RetrodevLib::ProjectBuildType::Raster)
+				icon = ICON_COSINE_WAVE;
 			else
 				icon = ICON_FILE_IMAGE;
 		} else if (node.isDirectory) {
@@ -1286,6 +1445,14 @@ namespace RetrodevGui {
 			if (isPalette) {
 				if (!DocumentsView::ActivateDocument(buildItemName, "", RetrodevLib::ProjectBuildType::Palette))
 					DocumentsView::OpenDocument(std::make_shared<DocumentPalette>(buildItemName));
+			}
+			//
+			// Open raster document
+			//
+			bool isRaster = (node.buildItemType == RetrodevLib::ProjectBuildType::Raster);
+			if (isRaster) {
+				if (!DocumentsView::ActivateDocument(buildItemName, "", RetrodevLib::ProjectBuildType::Raster))
+					DocumentsView::OpenDocument(std::make_shared<DocumentRaster>(buildItemName));
 			}
 		}
 		//
@@ -1737,6 +1904,53 @@ namespace RetrodevGui {
 		}
 		ImGui::PopStyleVar();
 		//
+		// New Raster modal
+		//
+		if (g_showNewRasterDialog) {
+			ImGui::OpenPopup("New Raster");
+			g_showNewRasterDialog = false;
+			g_popupJustOpened = true;
+		}
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 12.0f));
+		if (ImGui::BeginPopupModal("New Raster", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::AlignTextToFramePadding();
+			ImGui::Text("Raster name:");
+			ImGui::SetNextItemWidth(ImGui::GetFontSize() * 18.0f);
+			if (g_popupJustOpened) {
+				ImGui::SetKeyboardFocusHere();
+				g_popupJustOpened = false;
+			}
+			bool enterPressed = ImGui::InputText("##NewRasterName", g_newRasterNameBuf, sizeof(g_newRasterNameBuf), ImGuiInputTextFlags_EnterReturnsTrue);
+			bool nameValid = g_newRasterNameBuf[0] != '\0';
+			if (enterPressed && nameValid) {
+				if (RetrodevLib::Project::RasterAdd(g_newRasterNameBuf)) {
+					AppConsole::AddLogF(AppConsole::LogLevel::Info, "Created raster: %s", g_newRasterNameBuf);
+					g_forceProjectTreeRebuild = true;
+					g_pendingScrollToBuildItem = g_newRasterNameBuf;
+				} else {
+					AppConsole::AddLogF(AppConsole::LogLevel::Warning, "Raster already exists: %s", g_newRasterNameBuf);
+				}
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::BeginDisabled(!nameValid);
+			if (ImGui::Button("Create", ImVec2(80.0f, 0.0f))) {
+				if (RetrodevLib::Project::RasterAdd(g_newRasterNameBuf)) {
+					AppConsole::AddLogF(AppConsole::LogLevel::Info, "Created raster: %s", g_newRasterNameBuf);
+					g_forceProjectTreeRebuild = true;
+					g_pendingScrollToBuildItem = g_newRasterNameBuf;
+				} else {
+					AppConsole::AddLogF(AppConsole::LogLevel::Warning, "Raster already exists: %s", g_newRasterNameBuf);
+				}
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel", ImVec2(80.0f, 0.0f)))
+				ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+		ImGui::PopStyleVar();
+		//
 		// New Virtual Folder modal
 		//
 		if (g_showNewVirtualFolderDialog) {
@@ -1856,6 +2070,7 @@ namespace RetrodevGui {
 					renameItems(RetrodevLib::ProjectBuildType::Map);
 					renameItems(RetrodevLib::ProjectBuildType::Build);
 					renameItems(RetrodevLib::ProjectBuildType::Palette);
+					renameItems(RetrodevLib::ProjectBuildType::Raster);
 					g_forceProjectTreeRebuild = true;
 					AppConsole::AddLogF(AppConsole::LogLevel::Info, "Renamed folder: %s -> %s", oldPath.c_str(), newPath.c_str());
 				}

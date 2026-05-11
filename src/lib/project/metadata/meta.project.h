@@ -23,6 +23,7 @@
 #include "meta.map.h"
 #include "meta.build.h"
 #include "meta.palette.h"
+#include "meta.raster.h"
 #include <string>
 #include <vector>
 
@@ -120,5 +121,5 @@ template <> struct glz::meta<RetrodevLib::ProjectFile> {
 	static constexpr auto value =
 		object("version", &T::version, "ProjectName", &T::ProjectName, "images", &T::images, "audio", &T::audio, "sources", &T::sources, "scripts", &T::scripts, "data", &T::data,
 			   "buildBitmaps", &T::buildBitmaps, "buildTiles", &T::buildTiles, "buildSprites", &T::buildSprites, "buildMaps", &T::buildMaps, "buildBuilds", &T::buildBuilds,
-			   "buildPalettes", &T::buildPalettes, "buildFolders", &T::buildFolders, "selectedBuildItem", &T::selectedBuildItem);
+			   "buildPalettes", &T::buildPalettes, "buildRasters", &T::buildRasters, "buildFolders", &T::buildFolders, "selectedBuildItem", &T::selectedBuildItem);
 };

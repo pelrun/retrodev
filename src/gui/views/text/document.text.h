@@ -18,6 +18,9 @@
 
 namespace RetrodevGui {
 
+	const ImGui::ILanguageDefinition* GetZ80AsmLanguage();
+	const ImGui::ILanguageDefinition* GetAngelScriptLanguage();
+
 	class DocumentText : public DocumentView {
 	public:
 		DocumentText(const std::string& name, const std::string& filepath);
@@ -94,13 +97,18 @@ namespace RetrodevGui {
 		//
 		std::filesystem::file_time_type m_lastWriteTime = {};
 		//
+		// Write time recorded immediately after our own save, used to distinguish
+		// our save's timestamp update from a subsequent external write.
+		//
+		std::filesystem::file_time_type m_savedWriteTime = {};
+		//
 		// Set when an external modification is detected and the document has unsaved changes.
 		// Cleared once the user resolves the modal dialog.
 		//
 		bool m_externalChangeDetected = false;
 		//
-		// Set by SaveDocument() so the next Perform() frame skips the external-change check.
-		// Prevents the just-written file from triggering a spurious reload that resets the cursor.
+		// Set by SaveDocument() so the next Perform() frame can distinguish our own
+		// save's timestamp update from a genuine external write.
 		//
 		bool m_justSaved = false;
 	};

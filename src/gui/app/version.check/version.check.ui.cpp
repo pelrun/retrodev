@@ -75,7 +75,7 @@ namespace RetrodevGui {
         // Center on main viewport
         //
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(480.0f, 0.0f), ImGuiCond_Appearing);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
         if (ImGui::BeginPopupModal("Check for Updates##versioncheck", nullptr,
@@ -137,7 +137,7 @@ namespace RetrodevGui {
                 ImGui::EndDisabled();
                 if (hasNotes) {
                     ImGui::SameLine();
-                    if (ImGui::Button(ICON_TEXT_BOX_OUTLINE " Release Notes", ImVec2(140.0f, 0.0f)))
+                    if (ImGui::Button(ICON_TEXT_BOX_OUTLINE " Release Notes", ImVec2(180.0f, 0.0f)))
                         SDL_OpenURL(s_cachedResult.releaseNotesUrl.c_str());
                 }
                 ImGui::SameLine();

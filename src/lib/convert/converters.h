@@ -16,7 +16,18 @@
 
 namespace RetrodevLib {
 	//
+	// Display name constants for all supported target systems.
+	// These are the authoritative strings stored in project files and shown in the UI.
+	// All comparisons against targetSystem must use these constants.
 	//
+	namespace SupportedSystems {
+		inline const std::string AmstradCPC  = "Amstrad CPC/CPC+";
+		inline const std::string ZXSpectrum  = "ZX Spectrum";
+		inline const std::string Commodore64 = "Commodore 64";
+		inline const std::string MSX         = "MSX";
+	}
+	//
+	// Converter registry and system utilities.
 	//
 	class Converters {
 	public:
@@ -54,5 +65,14 @@ namespace RetrodevLib {
 		// Returns a converter for the given system and parameters
 		//
 		static std::shared_ptr<IBitmapConverter> GetBitmapConverter(GFXParams* params);
+		//
+		// Create a palette converter for the given system (independent of bitmap conversion)
+		// Used for color selection without image processing
+		//
+		static std::shared_ptr<IPaletteConverter> GetPaletteConverter(
+			const std::string& systemName,
+			const std::string& targetMode,
+			const std::string& paletteType
+		);
 	};
 }

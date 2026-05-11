@@ -166,7 +166,6 @@ namespace RetrodevGui {
 		SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 		SDL_ShowWindow(window);
 		SDL_SetDefaultTextureScaleMode(renderer, SDL_SCALEMODE_NEAREST);
-
 		//
 		// ImGui initialization
 		// ------------------------------

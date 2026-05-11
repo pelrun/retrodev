@@ -11,6 +11,7 @@
 #include "source.h"
 #include "source.rasm.h"
 #include <project/project.h>
+#include <vector>
 
 namespace RetrodevLib {
 

@@ -10,6 +10,8 @@
 
 #include "document.text.h"
 #include "../main.view.documents.h"
+#include "langs/lang.asm.z80.h"
+#include "langs/lang.angelscript.h"
 #include <retrodev.gui.h>
 #include <app/app.h>
 #include <app/app.icons.mdi.h>
@@ -19,23 +21,24 @@
 
 namespace RetrodevGui {
 	//
+	// Singleton language instances — function-local statics to avoid static initialization order issues.
+	// All TextEditor instances using the same pointer share a codelens symbol space.
+	//
+	static Z80AsmLanguage& Z80LangSingleton() { static Z80AsmLanguage s; return s; }
+	static AngelScriptLanguage& AngelScriptLangSingleton() { static AngelScriptLanguage s; return s; }
+
+	const ImGui::ILanguageDefinition* GetZ80AsmLanguage() { return &Z80LangSingleton(); }
+	const ImGui::ILanguageDefinition* GetAngelScriptLanguage() { return &AngelScriptLangSingleton(); }
+	//
 	// Map file extension to the matching language definition for syntax highlighting
 	//
-	static ImGui::TextEditor::LanguageDefinitionId GetLanguageForPath(const std::string& filepath) {
-		static const std::unordered_map<std::string, ImGui::TextEditor::LanguageDefinitionId> extMap = {
-			{".c", ImGui::TextEditor::LanguageDefinitionId::C},
-			{".h", ImGui::TextEditor::LanguageDefinitionId::C},
-			{".cpp", ImGui::TextEditor::LanguageDefinitionId::Cpp},
-			{".hpp", ImGui::TextEditor::LanguageDefinitionId::Cpp},
-			{".cxx", ImGui::TextEditor::LanguageDefinitionId::Cpp},
-			{".asm", ImGui::TextEditor::LanguageDefinitionId::Z80Asm},
-			{".as", ImGui::TextEditor::LanguageDefinitionId::AngelScript},
-		};
+	static const ImGui::ILanguageDefinition* GetLanguageForPath(const std::string& filepath) {
 		std::string ext = std::filesystem::path(filepath).extension().string();
-		auto it = extMap.find(ext);
-		if (it != extMap.end())
-			return it->second;
-		return ImGui::TextEditor::LanguageDefinitionId::None;
+		if (ext == ".asm")
+			return &Z80LangSingleton();
+		if (ext == ".as")
+			return &AngelScriptLangSingleton();
+		return nullptr;
 	}
 	//
 	// Receive "Find All" results from the text editor and push them to the Find channel
@@ -206,17 +209,20 @@ namespace RetrodevGui {
 				m_editor.SetShowTimingEnabled(!showTiming);
 			if (m_editor.HasTimingSupport()) {
 				if (ImGui::BeginMenu("Timing Type")) {
-					ImGui::TextEditor::TimingType currentTiming = m_editor.GetTimingType();
-					if (ImGui::MenuItem("Cycles", nullptr, currentTiming == ImGui::TextEditor::TimingType::Cycles)) {
-						m_editor.SetTimingType(ImGui::TextEditor::TimingType::Cycles);
+					Z80TimingType currentTiming = Z80LangSingleton().mTimingType;
+					if (ImGui::MenuItem("Cycles", nullptr, currentTiming == Z80TimingType::Cycles)) {
+						Z80LangSingleton().mTimingType = Z80TimingType::Cycles;
+						m_editor.SetLanguageDefinition(&Z80LangSingleton());
 						RefreshAllCodeLens();
 					}
-					if (ImGui::MenuItem("Cycles+M1", nullptr, currentTiming == ImGui::TextEditor::TimingType::CyclesM1)) {
-						m_editor.SetTimingType(ImGui::TextEditor::TimingType::CyclesM1);
+					if (ImGui::MenuItem("Cycles+M1", nullptr, currentTiming == Z80TimingType::CyclesM1)) {
+						Z80LangSingleton().mTimingType = Z80TimingType::CyclesM1;
+						m_editor.SetLanguageDefinition(&Z80LangSingleton());
 						RefreshAllCodeLens();
 					}
-					if (ImGui::MenuItem("Instructions", nullptr, currentTiming == ImGui::TextEditor::TimingType::Instructions)) {
-						m_editor.SetTimingType(ImGui::TextEditor::TimingType::Instructions);
+					if (ImGui::MenuItem("Instructions", nullptr, currentTiming == Z80TimingType::Instructions)) {
+						Z80LangSingleton().mTimingType = Z80TimingType::Instructions;
+						m_editor.SetLanguageDefinition(&Z80LangSingleton());
 						RefreshAllCodeLens();
 					}
 					ImGui::EndMenu();
@@ -405,7 +411,7 @@ namespace RetrodevGui {
 				std::string upperWord;
 				for (size_t i = 0; i < m_contextMenuWord.size(); i++)
 					upperWord += (char)std::toupper((unsigned char)m_contextMenuWord[i]);
-				const std::vector<ImGui::TextEditor::CodeLensFileData>& files = ImGui::TextEditor::GetCodeLensFiles();
+				const std::vector<ImGui::TextEditor::CodeLensFileData>& files = ImGui::TextEditor::AllCodeLensFiles();
 				for (size_t fi = 0; fi < files.size() && m_contextMenuSymbolLine < 0; fi++) {
 					for (size_t si = 0; si < files[fi].symbols.size() && m_contextMenuSymbolLine < 0; si++) {
 						const ImGui::TextEditor::CodeLensSymbolData& sym = files[fi].symbols[si];
@@ -462,10 +468,10 @@ namespace RetrodevGui {
 	// Used to propagate a setting change to every file without tracking instances.
 	//
 	void DocumentText::RefreshAllCodeLens() {
-		for (const auto& file : ImGui::TextEditor::GetCodeLensFiles()) {
-			ImGui::TextEditor::LanguageDefinitionId lang = GetLanguageForPath(file.filePath);
-			if (lang != ImGui::TextEditor::LanguageDefinitionId::None)
-				ImGui::TextEditor::EnqueueCodeLensFile(file.filePath, lang);
+		for (const auto& file : ImGui::TextEditor::AllCodeLensFiles()) {
+			const ImGui::ILanguageDefinition* lang = GetLanguageForPath(file.filePath);
+			if (lang != nullptr)
+				ImGui::TextEditor::EnqueueCodeLensFileStatic(file.filePath, lang);
 		}
 	}
 	//
@@ -543,20 +549,27 @@ namespace RetrodevGui {
 	//
 	bool DocumentText::SaveDocument() {
 		const std::string content = m_editor.GetText();
-		std::ofstream file(m_filePath, std::ios::binary | std::ios::trunc);
-		if (!file.good()) {
-			AppConsole::AddLogF(AppConsole::LogLevel::Error, "Failed to save file: %s", m_filePath.c_str());
-			return false;
-		}
-		file.write(content.data(), (std::streamsize)content.size());
-		if (!file.good()) {
-			AppConsole::AddLogF(AppConsole::LogLevel::Error, "Failed to write file: %s", m_filePath.c_str());
-			return false;
+		// Scope the ofstream so the file descriptor is closed and the OS commits
+		// the final write timestamp before we read it below. If we read last_write_time
+		// while the file is still open the OS may not have finalised the timestamp yet,
+		// causing the external-change guard to fire on the very next Perform() frame.
+		{
+			std::ofstream file(m_filePath, std::ios::binary | std::ios::trunc);
+			if (!file.good()) {
+				AppConsole::AddLogF(AppConsole::LogLevel::Error, "Failed to save file: %s", m_filePath.c_str());
+				return false;
+			}
+			file.write(content.data(), (std::streamsize)content.size());
+			if (!file.good()) {
+				AppConsole::AddLogF(AppConsole::LogLevel::Error, "Failed to write file: %s", m_filePath.c_str());
+				return false;
+			}
 		}
 		m_originalText = content;
 		SetModified(false);
 		std::error_code ec;
 		m_lastWriteTime = std::filesystem::last_write_time(m_filePath, ec);
+		m_savedWriteTime = m_lastWriteTime;
 		m_justSaved = true;
 		return true;
 	}
@@ -573,21 +586,55 @@ namespace RetrodevGui {
 			std::error_code ec;
 			std::filesystem::file_time_type diskTime = std::filesystem::last_write_time(m_filePath, ec);
 			if (!ec && diskTime != m_lastWriteTime) {
-				m_lastWriteTime = diskTime;
 				if (m_justSaved) {
-					// Delayed timestamp update from our own save -- absorb it, do not treat as external change
-					m_justSaved = false;
+					//
+					// Delayed timestamp update from our own save -- absorb it only if the
+					// disk time matches what we recorded right after writing. If the disk time
+					// is newer than our saved baseline it means an external tool also wrote the
+					// file after us, so fall through to the reload/dialog logic below.
+					//
+					if (diskTime <= m_savedWriteTime) {
+						m_lastWriteTime = diskTime;
+						m_justSaved = false;
+					} else {
+						//
+						// External write happened after our save -- treat as external change
+						//
+						m_justSaved = false;
+						m_lastWriteTime = diskTime;
+						if (!IsModified()) {
+							std::ifstream reloadFile(m_filePath);
+							if (reloadFile.good()) {
+								std::string content((std::istreambuf_iterator<char>(reloadFile)), std::istreambuf_iterator<char>());
+								auto savedCursor = m_editor.GetCursorPosition();
+								m_editor.SetText(content);
+								m_originalText = content;
+								SetModified(false);
+								int lastLine = m_editor.GetLineCount() - 1;
+								int restoreLine = savedCursor.line > lastLine ? lastLine : savedCursor.line;
+								m_editor.SetCursorPosition(restoreLine, savedCursor.column);
+							}
+						} else {
+							m_externalChangeDetected = true;
+							ImGui::OpenPopup("File Changed Externally##ExternalChangeModal");
+						}
+					}
 				} else {
+					m_lastWriteTime = diskTime;
 					if (!IsModified()) {
 						//
-						// No unsaved changes -- reload silently
+						// No unsaved changes -- reload silently, keeping the cursor on the same line
 						//
 						std::ifstream reloadFile(m_filePath);
 						if (reloadFile.good()) {
 							std::string content((std::istreambuf_iterator<char>(reloadFile)), std::istreambuf_iterator<char>());
+							auto savedCursor = m_editor.GetCursorPosition();
 							m_editor.SetText(content);
 							m_originalText = content;
 							SetModified(false);
+							int lastLine = m_editor.GetLineCount() - 1;
+							int restoreLine = savedCursor.line > lastLine ? lastLine : savedCursor.line;
+							m_editor.SetCursorPosition(restoreLine, savedCursor.column);
 						}
 					} else {
 						//
@@ -602,9 +649,9 @@ namespace RetrodevGui {
 		//
 		// External change modal -- only shown when unsaved changes conflict with a disk change
 		//
-		ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+		ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
-		if (ImGui::BeginPopupModal("File Changed Externally##ExternalChangeModal", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		if (ImGui::BeginPopupModal("File Changed Externally##ExternalChangeModal", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
 			ImGui::AlignTextToFramePadding();
 			ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), ICON_ALERT_CIRCLE);
 			ImGui::SameLine();

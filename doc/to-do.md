@@ -1,7 +1,7 @@
 ### TO-DO list
 
-* Language API definitions must be injected from the document and not by the language to allow differences regarding the tool or language variant we are using
 * Add a "Find all references" (its prepared but not done)
+* Add code folding.
 * Add support for more systems (its prepared but only Amstrad is defined)
 * Add more examples
 * Add more common reusable code and macros for the SDK folder
@@ -22,3 +22,9 @@
     * This is something that may be true (graphics participating two zones but is unsolved)
 * Optimizations
   * Palette solver can be optimized
+  * Raster Effects can be optimized
+* DSK Explorer
+* Add on ImGui the wait mode (avoid burn the CPU)
+* Add more support for plus class machines.
+
+

@@ -14,7 +14,6 @@
 #include <app/app.console.h>
 #include <app/version.check/version.check.h>
 #include <app/version.check/version.check.ui.h>
-#include <assets/source/source.h>
 #include <assets/source/source.emulator.h>
 #include <views/build/document.build.settings.h>
 #include <dialogs/dialog.error.h>
@@ -32,13 +31,11 @@ namespace RetrodevGui {
 	static std::string s_lastProjectDir;
 
 	//
-	// Execute a build for the given build item name.
-	// Returns true if the build succeeded, false on error or no params.
+	// Prepare a step-based build for buildItemName.
+	// Saves all open documents, clears the Build console, sets the project CWD,
+	// then calls Project::BuildPrepare to flatten the dependency tree into work steps.
 	//
-	static bool ExecuteBuild(const std::string& buildItemName) {
-		RetrodevLib::SourceParams* params = nullptr;
-		if (!RetrodevLib::Project::BuildGetParams(buildItemName, &params) || params == nullptr)
-			return false;
+	void MainViewMenu::StartBuild(const std::string& buildItemName, bool debugAfter) {
 		//
 		// Save any unsaved project/document changes before building
 		//
@@ -52,31 +49,24 @@ namespace RetrodevGui {
 		}
 		AppConsole::Clear(AppConsole::Channel::Build);
 		//
-		// Set CWD to the project folder so build tools resolve relative paths correctly,
-		// then restore it after the build regardless of outcome.
+		// Set CWD to the project folder so build tools resolve relative paths correctly.
+		// Restored in Perform() when BuildStep reports completion.
 		//
-		std::filesystem::path prevCwd = std::filesystem::current_path();
+		m_prevCwd = std::filesystem::current_path();
 		std::filesystem::path projectDir = std::filesystem::path(RetrodevLib::Project::GetPath()).parent_path();
 		std::filesystem::current_path(projectDir);
 		//
 		// Mirror script log output to the Build channel for the duration of the build
 		//
 		AppConsole::SetScriptMirrorToBuild(true);
-		//
-		// Process all declared dependencies before invoking the assembler
-		//
-		if (!RetrodevLib::Project::BuildProcessDependencies(buildItemName)) {
+		if (!RetrodevLib::Project::BuildPrepare(buildItemName)) {
 			AppConsole::SetScriptMirrorToBuild(false);
-			std::filesystem::current_path(prevCwd);
-			return false;
+			std::filesystem::current_path(m_prevCwd);
+			return;
 		}
-		bool ok = RetrodevLib::SourceBuild::Build(params);
-		AppConsole::SetScriptMirrorToBuild(false);
-		std::filesystem::current_path(prevCwd);
-		// Clear any modified flags that the build process may have set on project data.
-		RetrodevLib::Project::ClearModified();
-		RetrodevGui::DocumentsView::ClearAllModifiedFlags();
-		return ok;
+		m_buildRunning = true;
+		m_buildItemName = buildItemName;
+		m_debugAfterBuild = debugAfter;
 	}
 	//
 	// Launch the emulator for the given build item, injecting machine-local exe paths.
@@ -159,7 +149,7 @@ namespace RetrodevGui {
 			if (projectOpen)
 				RetrodevLib::Project::SetSelectedBuildItem(selectedItem);
 		}
-		const bool canBuild = projectOpen && !selectedItem.empty();
+		const bool canBuild = projectOpen && !selectedItem.empty() && !m_buildRunning;
 		//
 		// Measure right-side block width so we can right-justify it
 		//
@@ -189,9 +179,12 @@ namespace RetrodevGui {
 			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.58f, 0.15f, 1.00f));
 			ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.35f, 0.05f, 1.00f));
 			if (ImGui::Button(ICON_CONTENT_SAVE_ALERT)) {
+				DocumentsView::SaveAllModified();
 				std::string currentProjectPath = RetrodevLib::Project::GetPath();
-				if (RetrodevLib::Project::Save(currentProjectPath))
+				if (RetrodevLib::Project::Save(currentProjectPath)) {
+					RetrodevLib::Project::ClearModified();
 					DocumentsView::ClearAllModifiedFlags();
+				}
 			}
 			ImGui::PopStyleColor(3);
 			if (ImGui::IsItemHovered())
@@ -218,13 +211,20 @@ namespace RetrodevGui {
 		ImGui::SameLine();
 		ImGui::BeginDisabled(!canBuild);
 		if (ImGui::Button(ICON_HAMMER " Build"))
-			ExecuteBuild(selectedItem);
+			StartBuild(selectedItem, false);
 		ImGui::SameLine();
-		if (ImGui::Button(ICON_BUG_PLAY " Debug")) {
-			if (ExecuteBuild(selectedItem))
-				LaunchEmulator(selectedItem);
-		}
+		if (ImGui::Button(ICON_BUG_PLAY " Debug"))
+			StartBuild(selectedItem, true);
 		ImGui::EndDisabled();
+		//
+		// Spinner shown to the right of the disabled buttons while a build is running
+		//
+		if (m_buildRunning) {
+			ImGui::SameLine();
+			const char* const kSpinFrames[] = {"|", "/", "-", "\\"};
+			int spinIdx = (int)(ImGui::GetTime() * 6.0) % 4;
+			ImGui::TextDisabled("%s", kSpinFrames[spinIdx]);
+		}
 		//
 		// Suppress unused-variable warning for frameH (used as guard for minimum row height)
 		//
@@ -248,13 +248,12 @@ namespace RetrodevGui {
 				ImGui::BeginDisabled(!RetrodevLib::Project::IsOpen());
 				if (ImGui::MenuItem(ICON_CONTENT_SAVE " Save Project", "Ctrl+S")) {
 					//
-					// This is just "save" not "save as" so we will save to the current project path, if any
+					// Save all open documents first, then the project
 					//
+					DocumentsView::SaveAllModified();
 					std::string currentProjectPath = RetrodevLib::Project::GetPath();
 					if (RetrodevLib::Project::Save(currentProjectPath)) {
-						//
-						// Project saved successfully, clear all document modified flags
-						//
+						RetrodevLib::Project::ClearModified();
 						DocumentsView::ClearAllModifiedFlags();
 					}
 				}
@@ -298,12 +297,28 @@ namespace RetrodevGui {
 			ImGui::EndMainMenuBar();
 		}
 		//
+		// Poll background build: drain queued log messages and check for completion
+		//
+		if (m_buildRunning) {
+			RetrodevLib::Project::BuildStepStatus status = RetrodevLib::Project::BuildStep();
+			if (status != RetrodevLib::Project::BuildStepStatus::Running) {
+				AppConsole::SetScriptMirrorToBuild(false);
+				std::filesystem::current_path(m_prevCwd);
+				RetrodevLib::Project::ClearModified();
+				RetrodevGui::DocumentsView::ClearAllModifiedFlags();
+				m_buildRunning = false;
+				if (status == RetrodevLib::Project::BuildStepStatus::Succeeded && m_debugAfterBuild)
+					LaunchEmulator(m_buildItemName);
+				m_debugAfterBuild = false;
+			}
+		}
+		//
 		// F5: build the currently selected build item, then launch if successful
 		//
 		if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
 			std::string selected = RetrodevLib::Project::GetSelectedBuildItem();
-			if (!selected.empty() && ExecuteBuild(selected))
-				LaunchEmulator(selected);
+			if (!selected.empty() && !m_buildRunning)
+				StartBuild(selected, true);
 		}
 		// Handle file dialog results
 		if (ImGui::FileDialog::Instance().IsDone("NewProjectDialog")) {

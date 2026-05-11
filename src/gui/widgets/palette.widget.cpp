@@ -671,4 +671,110 @@ namespace RetrodevGui {
 		AppConsole::AddLogF(AppConsole::LogLevel::Info, "Transparent color set to R:%d G:%d B:%d", r, g, b);
 	}
 
+	//
+	// SystemColorPicker implementation
+	//
+	void SystemColorPicker::Open() {
+		m_isOpen = true;
+		m_shouldOpenThisFrame = true;
+	}
+
+	bool SystemColorPicker::RenderPickerPopup(
+		std::shared_ptr<RetrodevLib::IPaletteConverter> palette,
+		int& outColorIndex,
+		const char* popupId,
+		const char* title)
+	{
+		if (!palette)
+			return false;
+
+		//
+		// Call OpenPopup if this frame was marked to open
+		// This must be called at top-level scope, before any child windows
+		//
+		if (m_shouldOpenThisFrame) {
+			ImGui::OpenPopup(popupId);
+			m_shouldOpenThisFrame = false;
+		}
+
+		bool selected = false;
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+		ImVec2 colorPickCenter = ImGui::GetMainViewport()->GetCenter();
+		ImGui::SetNextWindowPos(colorPickCenter, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+		if (ImGui::BeginPopupModal(popupId, &m_isOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::Text("%s", title);
+			ImGui::Separator();
+
+			//
+			// Get the system palette information
+			//
+			int systemMaxColors = palette->GetSystemMaxColors();
+
+			//
+			// Display system palette as a grid of color buttons
+			//
+			const float swatchSize = 30.0f;
+			const int colorsPerRow = 9;
+			for (int i = 0; i < systemMaxColors; i++) {
+				RetrodevLib::RgbColor sysColor = palette->GetSystemColorByIndex(i);
+				ImVec4 imColor = ImVec4(sysColor.r / 255.0f, sysColor.g / 255.0f, sysColor.b / 255.0f, 1.0f);
+				ImGui::PushID(i);
+
+				//
+				// Highlight current selection with yellow border
+				//
+				bool isSelected = (i == m_selectedColorIndex);
+				if (isSelected) {
+					ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
+					ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 3.0f);
+				}
+
+				if (ImGui::ColorButton("##syscolor", imColor, ImGuiColorEditFlags_NoAlpha, ImVec2(swatchSize, swatchSize))) {
+					m_selectedColorIndex = i;
+				}
+
+				if (isSelected) {
+					ImGui::PopStyleVar();
+					ImGui::PopStyleColor();
+				}
+
+				if (ImGui::IsItemHovered()) {
+					ImGui::SetTooltip("#%d\nR:%d G:%d B:%d", i, sysColor.r, sysColor.g, sysColor.b);
+				}
+
+				ImGui::PopID();
+
+				//
+				// Arrange in grid
+				//
+				if ((i + 1) % colorsPerRow != 0 && i < systemMaxColors - 1) {
+					ImGui::SameLine();
+				}
+			}
+
+			ImGui::Separator();
+
+			//
+			// Buttons
+			//
+			if (ImGui::Button("OK", ImVec2(120, 0))) {
+				outColorIndex = m_selectedColorIndex;
+				selected = true;
+				m_isOpen = false;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+				m_isOpen = false;
+				ImGui::CloseCurrentPopup();
+			}
+
+			ImGui::EndPopup();
+		}
+
+		ImGui::PopStyleVar();
+		return selected;
+	}
+
 }

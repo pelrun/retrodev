@@ -16,6 +16,45 @@
 namespace RetrodevGui {
 
 	//
+	// Instance-based system color picker for palette selection
+	// Used by raster editor, sprite picker, etc. - anywhere we need to select from system palette
+	// Not static: maintains state across frames for multiple independent picker instances
+	//
+	class SystemColorPicker {
+	public:
+		//
+		// Render the color picker popup (call each frame)
+		// Returns true when a color has been selected (popup closes)
+		// outColorIndex: receives the selected color system index (0-based)
+		// popupId: unique identifier for ImGui popup
+		// title: popup window title
+		//
+		bool RenderPickerPopup(
+			std::shared_ptr<RetrodevLib::IPaletteConverter> palette,
+			int& outColorIndex,
+			const char* popupId,
+			const char* title = "Select Color"
+		);
+		//
+		// Open the color picker popup
+		//
+		void Open();
+		//
+		// Check if picker is currently open
+		//
+		bool IsOpen() const { return m_isOpen; }
+		//
+		// Cancel the current selection and close picker
+		//
+		void Cancel() { m_isOpen = false; }
+
+	private:
+		bool m_isOpen = false;
+		bool m_shouldOpenThisFrame = false;  // One-shot flag to call ImGui::OpenPopup
+		int m_selectedColorIndex = 0;  // Persistent selection while open
+	};
+
+	//
 	// Palette widget for displaying and editing palette colors
 	//
 	class PaletteWidget {

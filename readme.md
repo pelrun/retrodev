@@ -24,6 +24,8 @@
 11. [Open Source Libraries and Licenses](#11-open-source-libraries-and-licenses)
 12. [License and Copyright](#12-license-and-copyright)
 
+> **Quick links to feature documentation:** [Bitmaps](doc/usage/bitmaps.md) · [Tiles](doc/usage/tiles.md) · [Sprites](doc/usage/sprites.md) · [Maps](doc/usage/maps.md) · [Raster effects](doc/usage/raster.md) · [Build](doc/usage/build.md) · [Palette](doc/usage/palette.md) · [Editor](doc/usage/editor.md) · [Export scripts](doc/usage/export-scripts.md)
+
 ---
 
 ## 1. What is Retrodev?
@@ -36,6 +38,7 @@ Developing software for retro home computers has always meant assembling a fragi
 - **Tile and sprite extraction** — slice a converted image into tiles or sprites ready to be referenced by your code.
 - **Tile map editor** — paint multi-layer scrolling maps using extracted tiles, with parallax preview and aspect-ratio-correct display per system and mode.
 - **Palette solver** — describe which graphics appear on screen at the same time and let Retrodev find a palette assignment that satisfies all constraints simultaneously.
+- **Raster effects generator** — define CRTC and Gate Array register changes at specific scanlines, validate timing in real time against hardware constraints, and export the NOP-accurate Z80 interrupt handler code with a single click. Currently targets the Amstrad CPC; generators for other systems will be added as support is extended.
 - **Integrated code editor** — write Z80 assembly and AngelScript export scripts without leaving the application. The editor provides syntax highlighting, RASM directive and label auto-complete, code-lens timing annotations for Z80, and full Retrodev API auto-complete and hover documentation for AngelScript.
 - **Scripted export** — write AngelScript export scripts for bitmaps, tile sets, sprites and maps that produce exactly the binary format your program expects, with full control over layout, headers and compression.
 - **Project-based workflow** — everything lives in a `.retrodev` project file. Open it, build it, run it. No batch files.
@@ -82,6 +85,14 @@ For the complete documentation on the palette solver, click [here](doc/usage/pal
 Paint multi-layer tile maps with configurable parallax scroll speeds, tile group stamps, viewable-area overlay and aspect-ratio-correct canvas preview per target system and screen mode.
 
 For the complete documentation on the tile map editor, click [here](doc/usage/maps.md).
+
+### Raster effects generator
+
+Define a declarative sequence of CRTC and Gate Array register changes — one Frame command describing the full hardware timing, plus Effect commands targeting specific scanlines — then click **Export ASM** to produce the complete NOP-accurate Z80 interrupt handler code. A built-in CRTC simulator validates every write against hardware timing constraints in real time and reports violations before you export. A pixel-accurate monitor view shows the resulting frame layout as the hardware would produce it, with colour-coded interrupt slot boundaries.
+
+Currently supports the **Amstrad CPC**. Raster generators for other systems will be added as system support is extended.
+
+For the complete documentation on the raster effects editor, click [here](doc/usage/raster.md).
 
 ### Integrated code editor
 
@@ -219,6 +230,16 @@ Key concepts:
 For the complete documentation on maps, click [here](doc/usage/maps.md).
 
 <div align="center"><img src="doc/img/map-editor.png" alt="Map editor" width="800" /></div>
+
+### Raster effects
+
+A Raster project item defines a hardware raster effects sequence for the Amstrad CPC. You define a Frame command (complete hardware timing), add Effect commands at specific scanlines (colour changes, screen position shifts, mode changes), and optionally add Variable commands (runtime synchronization signals) and Subroutine commands (calls to your own code at scheduled scanlines). The CRTC simulator validates timing in real time as you edit; when the setup is correct, click **Export ASM** to write the complete Z80 handler to disk.
+
+Currently supports the **Amstrad CPC**. Raster generators for other systems will be added as system support is extended.
+
+For the complete documentation on the raster effects editor, click [here](doc/usage/raster.md).
+
+<div align="center"><img src="doc/img/raster-editor.png" alt="Raster effects editor" width="800" /></div>
 
 ### Build
 
@@ -408,7 +429,7 @@ The following ImGui widgets were adapted from community sources and in several c
 | Image | Author | Notes |
 |---|---|---|
 | Retrodev Logo & co | DALL-E (AI generated) | |
-| Alien sprites and platform tiles | [Mr.Capa](https://capasoft.eu) | Example graphics |
+| Alien sprites and platform tiles | [Mr.Capa](https://capasoft.eu) & [Titan](https://amstradmuseum.emu-france.info) | Example graphics from the game Alien the Xenomorph|
 
 ---
 

@@ -1,6 +1,19 @@
+
+* Added: Build items can be duplicated now.
+* Fixed: File changed externally sometimes not being detected
+* Fixed: Selection not working properly for preview on palette solver
+* Fixed: Build items now appear in alphabeticall order
+* Palette solver, mark members that does not exists as missing
+* Added: New build item. Raster effects. It allows to define raster effects to be applied on the build output. It is currently only supported on Amstrad CPC but it can be extended to other platforms.
+* Fixed: Hard work on the code editor to improve the performance and usability. It is now much more responsive.
+* Fixed: Bugfixes and corrections on the CPC sdk source files.
+* Fixed: Minor UI bugfixes.
+* Added: Languages now depends on the UI so they can be tweaked and redefined
+* Fixed: Console output is now properly aligned
+* Fixed: Improved codelens and navigate to errors
+* Fixed: Some UI crashes
+
 ## Version 0.9.24144546
-
-
 
 * Fixed: Add / remove tilesets was broken due to changes to improve the usability (always show deleted tiles)
 * Fixed: In the exporters, last option in comboboxes was always not recognized

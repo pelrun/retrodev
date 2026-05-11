@@ -68,10 +68,10 @@ namespace RetrodevGui {
 		// Center and size on first appearance -- wider to accommodate the table
 		//
 		ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-		ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+		ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 		ImGui::SetNextWindowSize(ImVec2(800.0f, 480.0f), ImGuiCond_Appearing);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 10.0f));
-		bool modalOpen = ImGui::BeginPopupModal("Export Script", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+		bool modalOpen = ImGui::BeginPopupModal("Export Script", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoMove);
 		ImGui::PopStyleVar();
 		if (!modalOpen)
 			return;
@@ -223,6 +223,9 @@ namespace RetrodevGui {
 				// TODO: Add error
 				break;
 			case RetrodevLib::ProjectBuildType::Palette:
+				// TODO: Add error
+				break;
+			case RetrodevLib::ProjectBuildType::Raster:
 				// TODO: Add error
 				break;
 			case RetrodevLib::ProjectBuildType::VirtualFolder:

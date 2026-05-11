@@ -31,8 +31,6 @@
     <None Include="$(MSBuildThisFileDirectory)doc\tech\contributing.md" />
     <None Include="$(MSBuildThisFileDirectory)doc\tech\porting.md" />
     <None Include="$(MSBuildThisFileDirectory)doc\tech\quantization-methods.md" />
-    <None Include="$(MSBuildThisFileDirectory)doc\tech\rasm-api.md" />
-    <None Include="$(MSBuildThisFileDirectory)doc\tech\rasm-directives.md" />
     <None Include="$(MSBuildThisFileDirectory)doc\tech\source-layout.md" />
     <None Include="$(MSBuildThisFileDirectory)doc\to-do.md" />
     <None Include="$(MSBuildThisFileDirectory)doc\usage\bitmaps.md" />
@@ -59,6 +57,7 @@
     <None Include="$(MSBuildThisFileDirectory)sdk\amstrad.cpc\exporters\cpc.tiles.as" />
     <None Include="$(MSBuildThisFileDirectory)sdk\amstrad.cpc\exporters\cpc.utils.as" />
     <None Include="$(MSBuildThisFileDirectory)sdk\amstrad.cpc\exporters\map.binary.as" />
+    <None Include="$(MSBuildThisFileDirectory)sdk\amstrad.cpc\functions\crtc\cpc.crtc.waiters.asm" />
     <None Include="$(MSBuildThisFileDirectory)sdk\amstrad.cpc\functions\disk\cpc.file.fdc.asm" />
     <None Include="$(MSBuildThisFileDirectory)sdk\amstrad.cpc\functions\disk\cpc.file.rom.asm" />
     <None Include="$(MSBuildThisFileDirectory)sdk\amstrad.cpc\functions\keyboard\cpc.keyboard.asm" />
@@ -83,7 +82,6 @@
     <None Include="$(MSBuildThisFileDirectory)sdk\amstrad.cpc\macros\psg\macros.psg.asm" />
     <None Include="$(MSBuildThisFileDirectory)src\retro.dev.gui.csx" />
     <None Include="$(MSBuildThisFileDirectory)src\retro.dev.lib.csx" />
-    <None Include="$(MSBuildThisFileDirectory)tools\fix_banners.ps1" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="$(MSBuildThisFileDirectory)ext\imgui.cfg\retrodev.imconfig.h" />
@@ -123,8 +121,12 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\views\main.view.project.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\views\maps\document.map.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\views\palette\document.palette.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\views\raster\document.raster.cpc.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\views\raster\document.raster.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\views\text\document.text.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\views\sprites\document.sprite.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\views\text\langs\lang.angelscript.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\views\text\langs\lang.asm.z80.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\views\tiles\document.tiles.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\widgets\conversion.widget.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\gui\widgets\data.export.widget.h" />
@@ -169,6 +171,9 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\export\export.params.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\export\export.sprites.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\export\export.tileset.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\generators\raster\amstrad.cpc\cpc.raster.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\generators\raster\amstrad.cpc\cpc.raster.params.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\generators\raster\raster.params.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\imgui.cfg\retrodev.imconfig.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\imgui.ext\imgui.splitter.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\log\log.h" />
@@ -189,12 +194,15 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\project\metadata\meta.palette.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\project\metadata\meta.project.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\project\metadata\meta.quantization.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\project\metadata\meta.raster.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\project\metadata\meta.resize.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\project\metadata\meta.converter.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\project\metadata\meta.sprites.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\project\metadata\meta.tileset.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\project\project.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\project\raster\raster.params.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\retrodev.lib.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\system\amstrad.cpc\devices\cpc.crtc.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\system\amstrad.cpc\devices\cpc.screen.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\system\version.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)src\lib\utils\utils.h" />
@@ -206,17 +214,6 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\imgui.splitter.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\imgui.text.editor.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\imgui.zoomable.image.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.angelscript.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.asm.z80.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.c.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.cpp.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.cs.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.glsl.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.hlsl.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.json.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.lua.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.python.cpp" />
-    <ClCompile Include="$(MSBuildThisFileDirectory)ext\imgui.ext\langs\lang.sql.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)ext\rasm.ext\rasm.api.c" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\cmd\main.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\app\app.console.cpp" />
@@ -245,8 +242,12 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\views\main.view.project.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\views\maps\document.map.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\views\palette\document.palette.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\views\raster\document.raster.cpc.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\views\raster\document.raster.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\views\text\document.text.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\views\sprites\document.sprite.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\views\text\langs\lang.angelscript.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\views\text\langs\lang.asm.z80.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\views\tiles\document.tiles.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\widgets\conversion.widget.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\gui\widgets\data.export.widget.cpp" />
@@ -280,6 +281,7 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\export\export.map.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\export\export.sprites.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\export\export.tileset.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\generators\raster\amstrad.cpc\cpc.raster.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\imgui.ext\imgui.splitter.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\log\log.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\process\image\color.correction.cpp" />
@@ -293,6 +295,7 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\process\image\tile.pack.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\project\project.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\retrodev.lib.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\system\amstrad.cpc\devices\cpc.crtc.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\system\amstrad.cpc\devices\cpc.screen.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)src\lib\utils\utils.cpp" />
   </ItemGroup>

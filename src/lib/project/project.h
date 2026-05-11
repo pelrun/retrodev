@@ -17,6 +17,7 @@
 #include <assets/map/map.params.h>
 #include <assets/source/source.params.h>
 #include <assets/palette/palette.params.h>
+#include <generators/raster/raster.params.h>
 #include <export/export.params.h>
 #include <string>
 #include <vector>
@@ -63,6 +64,10 @@ namespace RetrodevLib {
 		// Palette build item, stores a named palette configuration for the target platform
 		//
 		Palette,
+		//
+		// Raster build item, stores settings for system-specific raster effect code generation
+		//
+		Raster,
 		//
 		// Virtual folder -- a logical grouping node in the build section, not a real filesystem directory
 		//
@@ -200,6 +205,16 @@ namespace RetrodevLib {
 		ExportParams exportParams;
 	};
 	//
+	// Raster build item: target system settings and export configuration for code generation
+	//
+	struct ProjectBuildRasterEntry {
+		std::string name;
+		//
+		// Raster parameters (target system, mode, palette type)
+		//
+		RasterParams rasterParams;
+	};
+	//
 	// Build a map from a tile matrix
 	//
 	struct ProjectBuildMapEntry {
@@ -236,6 +251,7 @@ namespace RetrodevLib {
 		std::vector<ProjectBuildMapEntry> buildMaps;
 		std::vector<ProjectBuildBuildEntry> buildBuilds;
 		std::vector<ProjectBuildPaletteEntry> buildPalettes;
+		std::vector<ProjectBuildRasterEntry> buildRasters;
 		//
 		// Explicitly-created virtual folder paths under the Build section.
 		// Each entry is a slash-separated virtual path (e.g. "graphics/cpc").
@@ -629,6 +645,32 @@ namespace RetrodevLib {
 		static bool PaletteGetExportParams(const std::string& name, ExportParams** exportParams);
 
 		//
+		// Add a raster build item to the current project.
+		// Returns false if no project is open or the name already exists.
+		//
+		static bool RasterAdd(const std::string& name);
+		//
+		// Remove a raster build item from the current project.
+		// Returns false if no project is open or nothing was removed.
+		//
+		static bool RasterRemove(const std::string& name);
+		//
+		// Get parameters for a raster build item.
+		// params: output pointer set to the item's RasterParams.
+		// Returns true if the item was found, false otherwise.
+		//
+		static bool RasterGetParams(const std::string& name, RasterParams** params);
+		//
+		// Rename a raster build item in the current project.
+		// Returns false if no project is open, old name missing, or new name exists.
+		//
+		static bool RasterRename(const std::string& oldName, const std::string& newName);
+		//
+		// Get export parameters for a raster build item.
+		//
+		static bool RasterGetExportParams(const std::string& name, ExportParams** exportParams);
+
+		//
 		// Add a build script item to the current project.
 		// Returns false if no project is open or the name already exists.
 		//
@@ -661,6 +703,22 @@ namespace RetrodevLib {
 		// A failure aborts the remaining dependencies and stops the build.
 		//
 		static bool BuildProcessDependencies(const std::string& name);
+		//
+		// Prepare a step-based build for the given build item.
+		// Flattens the dependency tree into an ordered list of work items.
+		// Returns false if the build item cannot be found.
+		// Call BuildStep() each frame to execute one work item per call.
+		//
+		static bool BuildPrepare(const std::string& buildItemName);
+		//
+		// Status returned by BuildStep on each call.
+		//
+		enum class BuildStepStatus { Running, Succeeded, Failed };
+		//
+		// Execute the next pending work item prepared by the last BuildPrepare call.
+		// Returns Running while steps remain, Succeeded when all complete, Failed on error.
+		//
+		static BuildStepStatus BuildStep();
 		//
 		// Check whether adding targetDep as a dependency to buildItemName would create a circular
 		// or diamond dependency. Returns true if the dependency is safe to add, false if it would

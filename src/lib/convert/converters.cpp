@@ -16,15 +16,6 @@
 namespace RetrodevLib {
 
 	//
-	// Supported systems for conversion
-	//
-	namespace SupportedSystems {
-		const std::string AmstradCPC = "Amstrad CPC/CPC+";
-		const std::string ZXSpectrum = "ZX Spectrum";
-		const std::string Commodore64 = "Commodore 64";
-		const std::string MSX = "MSX";
-	}
-	//
 	// List of supported systems for conversion
 	//
 	static const std::vector<std::string> SupportedSystemsNames = {SupportedSystems::AmstradCPC, SupportedSystems::ZXSpectrum, SupportedSystems::Commodore64,
@@ -105,6 +96,29 @@ namespace RetrodevLib {
 			return nullptr;
 		}
 		Log::Warning("Converters::GetBitmapConverter no converter for system '%s'", params->SParams.TargetSystem.c_str());
+		return nullptr;
+	}
+	//
+	// Create a palette converter for the given system (independent of bitmap conversion)
+	//
+	std::shared_ptr<IPaletteConverter> Converters::GetPaletteConverter(
+		const std::string& systemName,
+		const std::string& targetMode,
+		const std::string& paletteType)
+	{
+		if (systemName == SupportedSystems::AmstradCPC) {
+			auto palette = std::make_shared<RetrodevLib::ConverterAmstradCPC::CPCPalette>();
+			//
+			// Only set mode/type if provided, otherwise use palette defaults
+			// Defaults: Mode 0, GA Palette
+			//
+			if (!targetMode.empty())
+				palette->SetCPCMode(targetMode);
+			if (!paletteType.empty())
+				palette->SetPaletteType(paletteType);
+			return palette;
+		}
+		Log::Warning("Converters::GetPaletteConverter: system '%s' not supported", systemName.c_str());
 		return nullptr;
 	}
 
