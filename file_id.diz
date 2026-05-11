@@ -1,0 +1,22 @@
+Retrodev v1.0.x
+Retro dev environment.
+
+All-in-one project workflow for:
+- bitmap conversion
+- tiles and sprites extraction
+- tile map editing with parallax
+- palette solving by constraints
+- raster FX generator (CPC)
+- integrated Z80/AngelScript editor
+- scripted binary export
+- build + emulator launch
+
+Targets:
+Amstrad CPC/CPC+ (full)
+ZX Spectrum, C64, MSX (prepared)
+
+Portable app: unzip and run.
+Includes SDK and examples.
+
+More info:
+https://github.com/tlotb/retrodev
