@@ -34,6 +34,11 @@ int dependencies(string[] args){
 		Folders.Delete(libpath,true);
 		return 0;
 	}
+	if (Host.IsLinux() && HasSystemFreetype() &&
+		(Args.Get(0) == "install" || Args.Get(0) == "update")) {
+		Msg.Print($"System FreeType detected. Skipping {libfriendlyname} source dependency action.");
+		return 0;
+	}
 	if (Args.Get(0) == "update") {
 		if (Folders.Exists(libpath)){
 			Msg.Print($"Updating {libname} sources");
