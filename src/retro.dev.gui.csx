@@ -42,14 +42,14 @@ int build(string[] args){
 	//
 	KList CompilerFlags = new KList { "-Wall -Wextra -Wno-unused-parameter" };
 	// The list of defines to use
-	// 
-	// 
+	//
+	//
 	KList Defines = new KList();
 	// ImGui user config header name to search for
 	Defines += "IMGUI_USER_CONFIG=\\\"retrodev.imconfig.h\\\"";
 	// Include directories
 	KList Includes = new KList();
-	// Include our own library 
+	// Include our own library
 	//
 	Includes += Share.Registry("retrodev", "incpath");
 	// ImGui for the UI
@@ -101,6 +101,12 @@ int build(string[] args){
 		Libraries += "Shcore.lib";
 		Libraries += "uxtheme.lib";
 		Libraries += "Ws2_32.lib";
+	}
+	if (Host.IsLinux()) {
+		Libraries += "m";
+		Libraries += "dl";
+		Libraries += "pthread";
+		Libraries += "rt";
 	}
 	// Create an instance of the clang tool.
 	Clang clang = new Clang();
@@ -163,7 +169,9 @@ int build(string[] args){
 	// And compile the sources
 	clang.Compile(src, objs);
 	// Use the librarian to generate a static library
-	objs+= OutputTmp + "compiled.resources" + clang.Options.ObjectExtension;
+	KValue resourcesObj = OutputTmp + "compiled.resources" + clang.Options.ObjectExtension;
+	if (Host.IsWindows() && Files.Exists(resourcesObj))
+		objs += resourcesObj;
 	clang.Linker(objs, OutputBin + binname + clang.Options.BinaryExtension);
 	// ------------------------------------------------------------------------
 	Msg.PrintTask("Building binary: " + binname + clang.Options.BinaryExtension);
@@ -187,7 +195,7 @@ int clean(string[] args){
 	folders += OutputBin+binname+"/";
 	folders += OutputLib+binname+"/";
 	folders += OutputTmp+binname+"/";
-	// We clean also the ext folder for obj files that are on the 
+	// We clean also the ext folder for obj files that are on the
 	// ext but being built as part of the project (like imgui and extensions)
 	folders += OutputTmp + "ext/";
 	Msg.BeginIndent();
@@ -253,10 +261,14 @@ private KList CreateSourceList(KValue srcpath){
 			}
 		}
 		if (Host.IsLinux()) {
-			// TODO
+			if (filex.Contains("/win/") || filex.Contains("/osx/")) {
+				continue;
+			}
 		}
 		if (Host.IsMacOS()) {
-			// TODO
+			if (filex.Contains("/win/") || filex.Contains("/lnx/")) {
+				continue;
+			}
 		}
 		srcFiltered += file;
 	}
@@ -270,7 +282,8 @@ public string CustomParameters(string file) {
 	string addArgs = "";
 	// Silence warings for some files
 	//
-	if (file == @"..\ext\imgui\misc/freetype/imgui_freetype.cpp") {
+	if (file == @"..\ext\imgui\misc/freetype/imgui_freetype.cpp" ||
+		file == "../ext/imgui/misc/freetype/imgui_freetype.cpp") {
 		addArgs = " -Wno-unused-function";
 		Msg.Print("Applying: Custom warning removal for imgui freetype");
 	}

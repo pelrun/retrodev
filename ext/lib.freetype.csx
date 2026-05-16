@@ -74,6 +74,10 @@ int build(string[] args){
 	Flags += "-Wno-deprecated-declarations";
 	// The list of defines to use
 	KList Defines = new KList { "FT2_BUILD_LIBRARY" };
+	if (Host.IsLinux()) {
+		Defines += "HAVE_UNISTD_H";
+		Defines += "HAVE_FCNTL_H";
+	}
 	// Include directories
 	KList Includes = new KList();
 	Includes += libpath+"include/";
@@ -211,8 +215,8 @@ private KList CreateSourceList(KValue libpath){
 		// Not yet.
 	}
 	if (Host.IsLinux()){
-		// Not yet.
-
+		src += libpath + "src/base/ftdebug.c";
+		src += libpath + "builds/unix/ftsystem.c";
 	}
 	return src;
 }
